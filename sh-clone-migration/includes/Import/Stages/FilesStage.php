@@ -115,6 +115,10 @@ class FilesStage extends AbstractStage {
 
 				$target = $this->resolveTarget( $job, $entry, $state );
 				if ( null === $target ) {
+					// A deliberately skipped entry (this plugin's own files,
+					// wp-config.php, core when core is excluded) still counts
+					// as handled, or its group would never reach 100%.
+					$this->trackGroup( $state, $entry['group'], 1, (int) $entry['size'] );
 					$reader->skipEntry( $entry );
 					$state['entry_offset'] = $reader->entryEndOffset( $entry );
 					continue;
@@ -122,6 +126,7 @@ class FilesStage extends AbstractStage {
 
 				if ( Format::TYPE_DIR === $entry['type'] ) {
 					$this->makeDirectory( $target, $entry, $job );
+					$this->trackGroup( $state, $entry['group'], 1, 0 );
 					$state['files']++;
 					$state['entry_offset'] = $reader->entryEndOffset( $entry );
 					$reader->skipEntry( $entry );
@@ -146,6 +151,7 @@ class FilesStage extends AbstractStage {
 
 		$job->setStageState( $this->key(), $state );
 		$job->setShared( 'files_restored', $state['files'] );
+		$job->setShared( 'files_progress', $state['groups'] );
 
 		if ( ! empty( $state['done'] ) ) {
 			$this->logger->info(
@@ -413,8 +419,10 @@ class FilesStage extends AbstractStage {
 			fclose( $handle );
 		}
 
-		$state['extract']  = $result;
-		$state['bytes']   += max( 0, $result['raw'] - $before );
+		$written = max( 0, $result['raw'] - $before );
+		$state['extract'] = $result;
+		$state['bytes']  += $written;
+		$this->trackGroup( $state, $entry['group'], 0, $written );
 
 		if ( empty( $result['done'] ) ) {
 			return;
@@ -437,21 +445,36 @@ class FilesStage extends AbstractStage {
 			@chmod( $target, $this->safeMode( $entry['mode'] ) );
 		}
 
-		$group = '' === $entry['group'] ? 'other' : $entry['group'];
-		if ( ! isset( $state['groups'][ $group ] ) ) {
-			$state['groups'][ $group ] = array(
-				'files' => 0,
-				'bytes' => 0,
-			);
-		}
-		$state['groups'][ $group ]['files']++;
-		$state['groups'][ $group ]['bytes'] += (int) $entry['size'];
+		$this->trackGroup( $state, $entry['group'], 1, 0 );
 
 		$state['files']++;
 		$state['entry_offset'] = $reader->entryEndOffset( $entry );
 		$state['entry']        = null;
 		$state['extract']      = array();
 		$state['target']       = '';
+	}
+
+	/**
+	 * Track per-group progress for the UI.
+	 *
+	 * @param array  $state State (by reference).
+	 * @param string $group Group.
+	 * @param int    $files Files to add.
+	 * @param int    $bytes Bytes to add.
+	 * @return void
+	 */
+	protected function trackGroup( array &$state, $group, $files, $bytes ) {
+		if ( '' === $group ) {
+			$group = 'other';
+		}
+		if ( ! isset( $state['groups'][ $group ] ) ) {
+			$state['groups'][ $group ] = array(
+				'files' => 0,
+				'bytes' => 0,
+			);
+		}
+		$state['groups'][ $group ]['files'] += $files;
+		$state['groups'][ $group ]['bytes'] += $bytes;
 	}
 
 	/**

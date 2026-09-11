@@ -283,7 +283,7 @@ class DatabaseStage extends AbstractStage {
 			$this->inspector,
 			array(
 				'rows_per_query'   => $this->settings->getInt( 'db_rows_per_query', 2000 ),
-				'max_insert_bytes' => $this->settings->getInt( 'db_max_insert_bytes', 524288 ),
+				'max_insert_bytes' => $this->maxInsertBytes(),
 			)
 		);
 
@@ -379,6 +379,30 @@ class DatabaseStage extends AbstractStage {
 			)
 		);
 		$this->logger->info( sprintf( '%d database triggers recorded.', count( $statements ) ) );
+	}
+
+	/**
+	 * Largest INSERT statement to generate.
+	 *
+	 * Kept below this server's max_allowed_packet, because a statement the
+	 * source cannot send is one the destination probably cannot accept either.
+	 * A single row larger than the limit is still emitted on its own; there is
+	 * nothing else to do with it, and the importer explains the failure.
+	 *
+	 * @return int
+	 */
+	protected function maxInsertBytes() {
+		$configured = $this->settings->getInt( 'db_max_insert_bytes', 524288 );
+
+		$row = $this->db->get_row( "SHOW VARIABLES LIKE 'max_allowed_packet'", ARRAY_N );
+		if ( ! empty( $row[1] ) ) {
+			$packet = (int) $row[1];
+			if ( $packet > 0 ) {
+				$configured = (int) min( $configured, max( 65536, $packet * 0.8 ) );
+			}
+		}
+
+		return $configured;
 	}
 
 	/**

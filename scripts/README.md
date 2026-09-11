@@ -9,6 +9,8 @@ a copy of WordPress at `/tmp/wp.tar.gz`.
 | `seed.php` | Seeds a source site with representative content: posts, pages, custom post types, taxonomies, users, media, menus, widgets, Elementor data, ACF field groups, WooCommerce products, custom tables and awkward serialized values |
 | `seed2.php` | Adds the literal-percent edge cases that caught a real corruption bug |
 | `check.php` | 81 assertions over the restored site: serialized integrity, URL replacement, Elementor, WooCommerce, ACF, users, custom tables, files and configuration safety |
+| `merge-test.sh` | Checks that the controlled (merge) import mode keeps tables the archive does not contain |
+| `build.sh` | Builds the distributable plugin ZIP |
 | `router.php` | Front controller so PHP's built-in server can serve pretty permalinks |
 
 `seed.php` and `check.php` run through `wp eval-file`. See

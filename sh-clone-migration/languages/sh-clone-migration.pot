@@ -1,0 +1,1755 @@
+# Copyright (C) 2026 SH
+# This file is distributed under the GPL-2.0-or-later.
+msgid ""
+msgstr ""
+"Project-Id-Version: SH Clone Migration 1.0.0\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/sh-clone-migration\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2026-09-11T08:45:05+00:00\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"X-Generator: WP-CLI 2.12.0\n"
+"X-Domain: sh-clone-migration\n"
+
+#. Plugin Name of the plugin
+#: sh-clone-migration.php
+#: includes/Admin/Menu.php:72
+#: includes/Admin/Views/export.php:23
+msgid "SH Clone Migration"
+msgstr ""
+
+#. Plugin URI of the plugin
+#: sh-clone-migration.php
+msgid "https://github.com/develop-shdigital/SH-Clone-Migration"
+msgstr ""
+
+#. Description of the plugin
+#: sh-clone-migration.php
+msgid "Complete WordPress website cloning and migration system. Exports an entire site (database + files) into a single portable .wpress archive and restores it on any other WordPress installation."
+msgstr ""
+
+#. Author of the plugin
+#: sh-clone-migration.php
+msgid "SH"
+msgstr ""
+
+#: includes/Admin/Ajax.php:100
+#: includes/Admin/Ajax.php:273
+msgid "Unknown action."
+msgstr ""
+
+#: includes/Admin/Ajax.php:284
+msgid "No chunk was received. The server may have rejected the request size."
+msgstr ""
+
+#. translators: %d: PHP upload error code
+#: includes/Admin/Ajax.php:292
+#, php-format
+msgid "The chunk upload failed with PHP error %d. Try a smaller chunk size in the settings."
+msgstr ""
+
+#: includes/Admin/Ajax.php:300
+msgid "The uploaded chunk was rejected."
+msgstr ""
+
+#: includes/Admin/Ajax.php:334
+msgid "Server side archives must be placed in the plugin storage directory or in the uploads directory."
+msgstr ""
+
+#: includes/Admin/Ajax.php:349
+msgid "You do not have permission to download migration archives."
+msgstr ""
+
+#: includes/Admin/Ajax.php:356
+#: includes/Admin/Controller.php:417
+#: includes/Admin/Controller.php:460
+msgid "That archive could not be found."
+msgstr ""
+
+#: includes/Admin/Ajax.php:373
+msgid "You do not have permission to download migration logs."
+msgstr ""
+
+#: includes/Admin/Ajax.php:380
+msgid "That migration log could not be found."
+msgstr ""
+
+#: includes/Admin/Ajax.php:435
+msgid "The archive could not be opened for reading."
+msgstr ""
+
+#: includes/Admin/Controller.php:69
+msgid "Archive encryption needs libsodium or OpenSSL, and neither is available on this server."
+msgstr ""
+
+#: includes/Admin/Controller.php:101
+msgid "The selected migration archive could not be found."
+msgstr ""
+
+#: includes/Admin/Controller.php:104
+msgid "Confirm that the destination site may be replaced before starting the restore."
+msgstr ""
+
+#: includes/Admin/Controller.php:110
+msgid "This archive is encrypted. Enter its migration password to restore it."
+msgstr ""
+
+#: includes/Admin/Controller.php:173
+#: includes/Admin/Controller.php:258
+#: includes/Admin/Controller.php:280
+#: includes/Admin/Controller.php:295
+msgid "That migration job no longer exists."
+msgstr ""
+
+#: includes/Admin/Controller.php:178
+msgid "That migration has no rollback point. It may have been skipped, or already cleaned up."
+msgstr ""
+
+#: includes/Admin/Controller.php:181
+msgid "The rollback point is not in the expected location."
+msgstr ""
+
+#: includes/Admin/Controller.php:439
+msgid "That archive could not be deleted."
+msgstr ""
+
+#: includes/Admin/Menu.php:73
+msgid "Clone Migration"
+msgstr ""
+
+#: includes/Admin/Menu.php:82
+msgid "Export"
+msgstr ""
+
+#: includes/Admin/Menu.php:83
+msgid "Import"
+msgstr ""
+
+#: includes/Admin/Menu.php:84
+msgid "Backups"
+msgstr ""
+
+#: includes/Admin/Menu.php:85
+#: includes/Admin/Views/tools.php:14
+msgid "Search &amp; Replace"
+msgstr ""
+
+#: includes/Admin/Menu.php:86
+#: includes/Admin/Views/settings.php:18
+msgid "Settings"
+msgstr ""
+
+#: includes/Admin/Menu.php:87
+msgid "System Status"
+msgstr ""
+
+#: includes/Admin/Menu.php:184
+msgid "This will replace this website's database and files with the contents of the archive. Existing data may be overwritten. Continue?"
+msgstr ""
+
+#: includes/Admin/Menu.php:185
+msgid "Delete this archive permanently?"
+msgstr ""
+
+#: includes/Admin/Menu.php:186
+msgid "Cancel this migration?"
+msgstr ""
+
+#: includes/Admin/Menu.php:187
+msgid "Uploading"
+msgstr ""
+
+#: includes/Admin/Menu.php:188
+msgid "Upload complete"
+msgstr ""
+
+#: includes/Admin/Menu.php:189
+msgid "Verifying"
+msgstr ""
+
+#: includes/Admin/Menu.php:190
+msgid "Archive verified"
+msgstr ""
+
+#: includes/Admin/Menu.php:191
+msgid "Failed"
+msgstr ""
+
+#: includes/Admin/Menu.php:192
+msgid "Connection problem, retrying"
+msgstr ""
+
+#: includes/Admin/Menu.php:193
+msgid "This archive is encrypted. Enter the migration password."
+msgstr ""
+
+#: includes/Admin/Menu.php:194
+msgid "Something went wrong. Check the migration log for details."
+msgstr ""
+
+#: includes/Admin/Menu.php:260
+msgid "You do not have permission to manage migrations on this site."
+msgstr ""
+
+#. translators: %s: free disk space
+#: includes/Admin/Menu.php:298
+#, php-format
+msgid "Free disk space: %s"
+msgstr ""
+
+#: includes/Admin/Notices.php:61
+msgid "SH Clone Migration:"
+msgstr ""
+
+#: includes/Admin/Notices.php:62
+msgid "this site is in maintenance mode because a migration is running. It is switched off automatically when the migration finishes or is abandoned."
+msgstr ""
+
+#: includes/Admin/Notices.php:77
+msgid "An interrupted migration was detected."
+msgstr ""
+
+#. translators: 1: job id, 2: progress
+#: includes/Admin/Notices.php:81
+#, php-format
+msgid "Job %1$s stopped at %2$s%%."
+msgstr ""
+
+#: includes/Admin/Notices.php:87
+#: includes/Admin/Views/backups.php:136
+msgid "Resume"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:21
+msgid "Migration backups"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:22
+msgid "Every archive this installation has produced or received."
+msgstr ""
+
+#: includes/Admin/Views/backups.php:29
+#: includes/Admin/Views/backups.php:48
+msgid "Archives"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:33
+msgid "Space used"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:37
+#: includes/Core/Environment.php:239
+msgid "Free disk space"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:43
+msgid "Less than 1 GB of disk space is left. Delete old archives before creating another one."
+msgstr ""
+
+#: includes/Admin/Views/backups.php:50
+msgid "No archives stored on this server."
+msgstr ""
+
+#: includes/Admin/Views/backups.php:55
+#: includes/Admin/Views/export.php:127
+msgid "Archive"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:56
+msgid "Source"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:57
+msgid "Contents"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:58
+#: includes/Admin/Views/export.php:128
+msgid "Size"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:59
+#: includes/Admin/Views/export.php:129
+msgid "Created"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:69
+#: includes/Admin/Views/export.php:139
+#: includes/Admin/Views/import.php:114
+msgid "encrypted"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:72
+#: includes/Admin/Views/export.php:142
+#: includes/Admin/Views/import.php:117
+msgid "incomplete"
+msgstr ""
+
+#. translators: 1: number of files, 2: number of tables
+#: includes/Admin/Views/backups.php:81
+#, php-format
+msgid "%1$s files, %2$s tables"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:94
+#: includes/Admin/Views/export.php:149
+msgid "Download"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:96
+msgid "Verify"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:97
+msgid "Delete"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:107
+msgid "Migration jobs"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:109
+msgid "No migration jobs recorded."
+msgstr ""
+
+#: includes/Admin/Views/backups.php:114
+msgid "Job"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:115
+msgid "Type"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:116
+msgid "Status"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:117
+msgid "Progress"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:118
+msgid "Updated"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:132
+msgid "Log"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:139
+msgid "Remove"
+msgstr ""
+
+#: includes/Admin/Views/export.php:24
+msgid "Clone your entire WordPress site into a single portable .wpress archive."
+msgstr ""
+
+#: includes/Admin/Views/export.php:35
+msgid "Create a migration archive"
+msgstr ""
+
+#. translators: %s: estimated size
+#: includes/Admin/Views/export.php:40
+#, php-format
+msgid "Everything is included by default: the whole database, all plugins, themes, uploads and must-use plugins. Estimated size before compression: %s."
+msgstr ""
+
+#: includes/Admin/Views/export.php:46
+msgid "Create Migration"
+msgstr ""
+
+#: includes/Admin/Views/export.php:50
+msgid "Large sites are handled in resumable steps. Keep this tab open, or let WP-Cron continue in the background."
+msgstr ""
+
+#: includes/Admin/Views/export.php:55
+msgid "Advanced settings"
+msgstr ""
+
+#: includes/Admin/Views/export.php:58
+msgid "Archive name"
+msgstr ""
+
+#: includes/Admin/Views/export.php:62
+msgid "Migration password (optional)"
+msgstr ""
+
+#: includes/Admin/Views/export.php:67
+msgid "Encrypts the archive contents. The password is never stored: you need it to resume, verify and restore the archive."
+msgstr ""
+
+#: includes/Admin/Views/export.php:68
+msgid "Encryption is unavailable on this server (libsodium and OpenSSL are both missing)."
+msgstr ""
+
+#: includes/Admin/Views/export.php:74
+msgid "Include WordPress core files (wp-admin, wp-includes and the root files)"
+msgstr ""
+
+#: includes/Admin/Views/export.php:75
+msgid "Not needed for a normal clone: the destination already has WordPress. wp-config.php is never exported."
+msgstr ""
+
+#: includes/Admin/Views/export.php:79
+msgid "Include tables that belong to another WordPress installation in the same database"
+msgstr ""
+
+#: includes/Admin/Views/export.php:82
+msgid "Additional exclusions (one pattern per line)"
+msgstr ""
+
+#: includes/Admin/Views/export.php:90
+msgid "Preparing migration..."
+msgstr ""
+
+#: includes/Admin/Views/export.php:92
+#: includes/Admin/Views/import.php:186
+#: includes/Admin/Views/tools.php:45
+msgid "Cancel"
+msgstr ""
+
+#: includes/Admin/Views/export.php:109
+#: includes/Admin/Views/import.php:202
+msgid "Migration log"
+msgstr ""
+
+#: includes/Admin/Views/export.php:120
+msgid "Recent migrations"
+msgstr ""
+
+#: includes/Admin/Views/export.php:122
+msgid "No migration archives yet."
+msgstr ""
+
+#: includes/Admin/Views/export.php:152
+msgid "Manage"
+msgstr ""
+
+#: includes/Admin/Views/import.php:25
+msgid "Import a migration"
+msgstr ""
+
+#: includes/Admin/Views/import.php:26
+msgid "Restore a .wpress archive onto this installation."
+msgstr ""
+
+#: includes/Admin/Views/import.php:32
+msgid "This destination already contains a live WordPress site."
+msgstr ""
+
+#. translators: 1: number of posts, 2: number of users
+#: includes/Admin/Views/import.php:36
+#, php-format
+msgid "It has %1$s posts and pages and %2$s users. Restoring an archive replaces them."
+msgstr ""
+
+#: includes/Admin/Views/import.php:42
+msgid "Create a safety backup first"
+msgstr ""
+
+#: includes/Admin/Views/import.php:48
+msgid "Upload an archive"
+msgstr ""
+
+#: includes/Admin/Views/import.php:51
+msgid "Drop a .wpress file here or choose a file"
+msgstr ""
+
+#: includes/Admin/Views/import.php:53
+msgid "Drag &amp; drop your .wpress file here"
+msgstr ""
+
+#: includes/Admin/Views/import.php:54
+msgid "or"
+msgstr ""
+
+#: includes/Admin/Views/import.php:55
+msgid "Choose File"
+msgstr ""
+
+#. translators: %s: chunk size
+#: includes/Admin/Views/import.php:61
+#, php-format
+msgid "Uploaded in resumable chunks of %s, so the PHP upload limit does not cap the archive size."
+msgstr ""
+
+#: includes/Admin/Views/import.php:72
+msgid "Abort"
+msgstr ""
+
+#: includes/Admin/Views/import.php:77
+msgid "Use a file already on the server"
+msgstr ""
+
+#. translators: %s: directory path
+#: includes/Admin/Views/import.php:82
+#, php-format
+msgid "Upload very large archives over SFTP into %s and register them here. This avoids the browser entirely."
+msgstr ""
+
+#: includes/Admin/Views/import.php:89
+msgid "Register archive"
+msgstr ""
+
+#: includes/Admin/Views/import.php:95
+msgid "Available archives"
+msgstr ""
+
+#: includes/Admin/Views/import.php:97
+msgid "No archives are available yet. Upload one above."
+msgstr ""
+
+#: includes/Admin/Views/import.php:129
+msgid "Restore options"
+msgstr ""
+
+#: includes/Admin/Views/import.php:133
+msgid "Destination URL"
+msgstr ""
+
+#: includes/Admin/Views/import.php:135
+msgid "Detected from this installation. Every reference to the source URL is rewritten to this one."
+msgstr ""
+
+#: includes/Admin/Views/import.php:138
+msgid "Migration password"
+msgstr ""
+
+#: includes/Admin/Views/import.php:140
+msgid "Only needed for encrypted archives."
+msgstr ""
+
+#: includes/Admin/Views/import.php:143
+msgid "Database mode"
+msgstr ""
+
+#: includes/Admin/Views/import.php:145
+msgid "Full replacement (recommended for cloning)"
+msgstr ""
+
+#: includes/Admin/Views/import.php:146
+msgid "Controlled import: keep tables that are not in the archive"
+msgstr ""
+
+#: includes/Admin/Views/import.php:153
+msgid "Verify every checksum before touching this site"
+msgstr ""
+
+#: includes/Admin/Views/import.php:155
+msgid "Create a rollback point of the current database first"
+msgstr ""
+
+#: includes/Admin/Views/import.php:157
+#: includes/Admin/Views/settings.php:126
+msgid "Rewrite the source URL to the destination URL"
+msgstr ""
+
+#: includes/Admin/Views/import.php:159
+msgid "Also replace bare occurrences of the source domain (advanced)"
+msgstr ""
+
+#: includes/Admin/Views/import.php:161
+msgid "Skip WordPress core files contained in the archive"
+msgstr ""
+
+#: includes/Admin/Views/import.php:163
+msgid "Delete the archive after a successful restore"
+msgstr ""
+
+#: includes/Admin/Views/import.php:167
+msgid "WARNING"
+msgstr ""
+
+#: includes/Admin/Views/import.php:168
+msgid "This migration will replace the destination website. Existing files and database data may be overwritten. Create a backup before continuing."
+msgstr ""
+
+#: includes/Admin/Views/import.php:171
+msgid "I understand that this website will be replaced."
+msgstr ""
+
+#: includes/Admin/Views/import.php:177
+msgid "Restore This Website"
+msgstr ""
+
+#: includes/Admin/Views/import.php:184
+msgid "Restoring..."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:19
+msgid "Defaults for new migrations. Nothing here caps how large a migration may be."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:24
+msgid "What to migrate"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:27
+msgid "WordPress core files"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:30
+msgid "Include wp-admin, wp-includes and the root files in new archives"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:31
+msgid "wp-config.php is never exported and never overwritten."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:35
+msgid "Default exclusions"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:38
+msgid "Skip caches and other regenerable directories"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:43
+msgid "Excluded directories"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:46
+msgid "One per line, relative to the WordPress root, for example wp-content/uploads/backups."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:50
+msgid "Excluded file patterns"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:53
+msgid "Globs such as *.log or */node_modules."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:58
+msgid "Engine"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:61
+msgid "Compression"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:64
+msgid "Automatic"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:65
+msgid "Always compress"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:66
+msgid "Store uncompressed (fastest)"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:68
+msgid "Level"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:73
+msgid "Block size"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:76
+msgid "Bytes held in memory at a time while reading or writing an archive."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:80
+msgid "Time budget per request"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:83
+msgid "Seconds. 0 detects a safe value from max_execution_time."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:87
+msgid "Memory guard"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:90
+msgid "Percent of the PHP memory limit at which a request hands over to the next one."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:94
+msgid "Database rows per query"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:97
+msgid "Reduced automatically for tables with very large rows."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:101
+msgid "Upload chunk size"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:104
+msgid "Clamped to whatever upload_max_filesize and post_max_size allow."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:108
+msgid "Background worker"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:111
+msgid "Let WP-Cron continue a migration when the browser tab is closed"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:116
+msgid "Restore behaviour"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:119
+msgid "Safety"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:122
+msgid "Snapshot the current database before replacing it"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:124
+msgid "Put the site in maintenance mode during a restore"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:128
+msgid "Rewrite absolute server paths as well"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:130
+msgid "Reactivate the plugins that were active on the source"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:134
+msgid "Archive verification"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:137
+msgid "Full: recompute every checksum"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:138
+msgid "Quick: structure and manifest only"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:144
+msgid "Housekeeping"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:147
+msgid "Keep jobs and logs for"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:150
+msgid "days. 0 keeps them forever. Archives are never deleted by this setting."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:154
+msgid "Maximum stored archives"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:157
+msgid "0 keeps every archive."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:161
+msgid "Delete temporary files after"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:164
+msgid "hours"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:168
+msgid "Log level"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:178
+msgid "Uninstall"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:181
+msgid "Delete this plugin's settings, jobs, logs and archives when it is uninstalled"
+msgstr ""
+
+#: includes/Admin/Views/settings.php:182
+msgid "Website content is never touched by the uninstaller, whatever this is set to."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:188
+msgid "Save Settings"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:18
+msgid "System status"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:19
+msgid "What this server can do, and how the migration engine adapts to it."
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:30
+msgid "Environment"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:44
+msgid "Selected migration engine"
+msgstr ""
+
+#. translators: %s: engine description
+#: includes/Admin/Views/system-status.php:49
+#, php-format
+msgid "Archive engine: %s"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:52
+msgid "streaming block writer with deflate compression"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:53
+msgid "streaming block writer, uncompressed (zlib unavailable)"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:61
+#: includes/Core/Environment.php:259
+msgid "zlib compression"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:62
+msgid "zlib stream filters"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:63
+msgid "ZipArchive (not required)"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:64
+msgid "Phar (not required)"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:65
+msgid "libsodium (XChaCha20-Poly1305 encryption)"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:66
+msgid "OpenSSL (AES-256-GCM fallback)"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:67
+msgid "Shell commands (not required)"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:68
+msgid "mysqldump binary (not required)"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:69
+msgid "SPL filesystem iterators"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:70
+msgid "set_time_limit()"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:71
+msgid "Writable storage directory"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:72
+msgid "Writable wp-content"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:84
+msgid "Nothing in this list is mandatory. The engine falls back to pure PHP streaming, which works on standard shared hosting without shell access."
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:89
+msgid "Storage"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:93
+msgid "Directory"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:97
+msgid "Direct web access"
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:102
+msgid "Denied by .htaccess, web.config and an index.php in every directory. The live check could not run on this server."
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:104
+msgid "Reachable over HTTP."
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:105
+msgid "This web server ignores .htaccess. Archive names are random, but block the directory in your server configuration as well."
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:108
+msgid "Blocked."
+msgstr ""
+
+#: includes/Admin/Views/system-status.php:109
+msgid "A live request for a file in the storage directory was refused. Downloads are served through an authenticated endpoint."
+msgstr ""
+
+#: includes/Admin/Views/tools.php:15
+msgid "Serialization aware replacement across every table in this database."
+msgstr ""
+
+#: includes/Admin/Views/tools.php:22
+msgid "Old URL or text"
+msgstr ""
+
+#: includes/Admin/Views/tools.php:26
+msgid "New URL or text"
+msgstr ""
+
+#: includes/Admin/Views/tools.php:32
+msgid "When both values are URLs, the escaped, percent encoded and protocol relative variants are replaced as well. Serialized values are parsed and their string lengths recalculated; anything that cannot be parsed is reported instead of being rewritten."
+msgstr ""
+
+#: includes/Admin/Views/tools.php:36
+msgid "Preview Changes"
+msgstr ""
+
+#: includes/Admin/Views/tools.php:37
+msgid "Run Replacement"
+msgstr ""
+
+#: includes/Admin/Views/tools.php:43
+msgid "Scanning..."
+msgstr ""
+
+#: includes/Archive/Catalog.php:87
+msgid "Not a valid SH Clone Migration archive."
+msgstr ""
+
+#: includes/Archive/Verifier.php:50
+msgid "The archive has no valid end marker: it is incomplete or was truncated during transfer."
+msgstr ""
+
+#: includes/Archive/Verifier.php:57
+msgid "The archive contains no manifest."
+msgstr ""
+
+#: includes/Archive/Verifier.php:61
+msgid "The archive manifest could not be parsed."
+msgstr ""
+
+#. translators: %s: error message
+#: includes/Archive/Verifier.php:67
+#, php-format
+msgid "The archive manifest could not be read: %s"
+msgstr ""
+
+#. translators: %s: entry path
+#: includes/Archive/Verifier.php:128
+#, php-format
+msgid "Checksum mismatch for %s."
+msgstr ""
+
+#. translators: %s: entry path
+#: includes/Archive/Verifier.php:135
+#, php-format
+msgid "Size mismatch for %s."
+msgstr ""
+
+#: includes/Archive/Verifier.php:158
+msgid "The archive digest does not match its contents: the archive is incomplete or has been modified."
+msgstr ""
+
+#: includes/Core/Environment.php:199
+msgid "WordPress version"
+msgstr ""
+
+#: includes/Core/Environment.php:203
+msgid "PHP version"
+msgstr ""
+
+#: includes/Core/Environment.php:207
+msgid "Database server"
+msgstr ""
+
+#: includes/Core/Environment.php:211
+msgid "Table prefix"
+msgstr ""
+
+#: includes/Core/Environment.php:215
+msgid "Database charset / collation"
+msgstr ""
+
+#: includes/Core/Environment.php:219
+msgid "PHP memory limit"
+msgstr ""
+
+#: includes/Core/Environment.php:223
+msgid "WordPress memory limit"
+msgstr ""
+
+#: includes/Core/Environment.php:227
+msgid "Max execution time"
+msgstr ""
+
+#: includes/Core/Environment.php:228
+msgid "unlimited"
+msgstr ""
+
+#: includes/Core/Environment.php:231
+msgid "Upload max filesize"
+msgstr ""
+
+#: includes/Core/Environment.php:235
+msgid "POST max size"
+msgstr ""
+
+#: includes/Core/Environment.php:240
+#: includes/Core/Environment.php:244
+#: includes/Filesystem/Storage.php:223
+msgid "unknown"
+msgstr ""
+
+#: includes/Core/Environment.php:243
+msgid "Total disk space"
+msgstr ""
+
+#: includes/Core/Environment.php:247
+msgid "Storage directory"
+msgstr ""
+
+#: includes/Core/Environment.php:251
+msgid "Storage writable"
+msgstr ""
+
+#: includes/Core/Environment.php:252
+#: includes/Core/Environment.php:256
+#: includes/Core/Environment.php:276
+msgid "yes"
+msgstr ""
+
+#: includes/Core/Environment.php:252
+#: includes/Core/Environment.php:256
+#: includes/Core/Environment.php:276
+msgid "no"
+msgstr ""
+
+#: includes/Core/Environment.php:255
+msgid "wp-content writable"
+msgstr ""
+
+#: includes/Core/Environment.php:260
+#: includes/Core/Environment.php:264
+#: includes/Core/Environment.php:268
+#: includes/Core/Environment.php:272
+msgid "available"
+msgstr ""
+
+#: includes/Core/Environment.php:260
+#: includes/Core/Environment.php:264
+#: includes/Core/Environment.php:268
+msgid "missing"
+msgstr ""
+
+#: includes/Core/Environment.php:263
+msgid "ZipArchive"
+msgstr ""
+
+#: includes/Core/Environment.php:267
+msgid "libsodium (archive encryption)"
+msgstr ""
+
+#: includes/Core/Environment.php:268
+msgid "OpenSSL fallback"
+msgstr ""
+
+#: includes/Core/Environment.php:271
+msgid "Shell commands"
+msgstr ""
+
+#: includes/Core/Environment.php:272
+msgid "unavailable (not required)"
+msgstr ""
+
+#: includes/Core/Environment.php:275
+msgid "Multisite"
+msgstr ""
+
+#: includes/Core/Environment.php:279
+#: includes/Import/Stages/VerifyStage.php:104
+msgid "Database connection"
+msgstr ""
+
+#: includes/Core/Environment.php:280
+msgid "OK"
+msgstr ""
+
+#: includes/Core/Environment.php:280
+msgid "FAILED"
+msgstr ""
+
+#. translators: %s: memory limit
+#: includes/Core/Environment.php:306
+#, php-format
+msgid "PHP memory limit is low (%s). The migration engine streams data and stays well below it, but raising it to 256M gives more headroom."
+msgstr ""
+
+#. translators: %s: directory path
+#: includes/Core/Environment.php:316
+#, php-format
+msgid "The storage directory is not writable: %s"
+msgstr ""
+
+#: includes/Core/Environment.php:324
+msgid "wp-content is not writable, so files cannot be restored on this server."
+msgstr ""
+
+#: includes/Core/Environment.php:330
+msgid "zlib is unavailable, archives will be stored uncompressed. Migration still works."
+msgstr ""
+
+#: includes/Core/Environment.php:336
+msgid "Neither libsodium nor OpenSSL is available, so archive encryption is disabled on this server."
+msgstr ""
+
+#. translators: %s: upload limit
+#: includes/Core/Environment.php:344
+#, php-format
+msgid "Browser upload limit is %s. Large archives are uploaded in chunks below that limit, so this does not cap the archive size."
+msgstr ""
+
+#. translators: 1: free space, 2: estimated archive size
+#: includes/Core/Environment.php:356
+#, php-format
+msgid "Available disk space (%1$s) may not be sufficient for an archive of this site (rough estimate %2$s)."
+msgstr ""
+
+#. translators: %s: directory path
+#: includes/Core/Environment.php:369
+#, php-format
+msgid "The storage directory is readable over HTTP on this server, which means a migration archive could be downloaded by anyone who knows its file name. Archive names are random, but you should still block %s in your web server configuration. The documentation contains an nginx snippet."
+msgstr ""
+
+#: includes/Core/Environment.php:378
+msgid "open_basedir is active. Only paths inside the allowed list can be migrated."
+msgstr ""
+
+#: includes/Export/Stages/DatabaseStage.php:80
+msgid "Exporting the database"
+msgstr ""
+
+#. translators: %s: number of tables
+#: includes/Export/Stages/DatabaseStage.php:173
+#, php-format
+msgid "%s database tables exported"
+msgstr ""
+
+#. translators: 1: table name, 2: current index, 3: total
+#: includes/Export/Stages/DatabaseStage.php:183
+#, php-format
+msgid "Exporting %1$s (%2$d/%3$d)"
+msgstr ""
+
+#: includes/Export/Stages/FilesStage.php:45
+msgid "Exporting files"
+msgstr ""
+
+#: includes/Export/Stages/FilesStage.php:79
+msgid "No files to export"
+msgstr ""
+
+#. translators: 1: file count, 2: size
+#: includes/Export/Stages/FilesStage.php:132
+#, php-format
+msgid "%1$s files exported (%2$s)"
+msgstr ""
+
+#. translators: 1: files done, 2: total files, 3: size done
+#: includes/Export/Stages/FilesStage.php:147
+#, php-format
+msgid "Exporting files: %1$s of %2$s (%3$s)"
+msgstr ""
+
+#: includes/Export/Stages/FinalizeStage.php:40
+msgid "Finalising the archive"
+msgstr ""
+
+#: includes/Export/Stages/FinalizeStage.php:63
+msgid "Archive finalised"
+msgstr ""
+
+#. translators: %s: archive size
+#: includes/Export/Stages/FinalizeStage.php:105
+#, php-format
+msgid "Archive written (%s)"
+msgstr ""
+
+#: includes/Export/Stages/InitializeStage.php:62
+msgid "Validating environment"
+msgstr ""
+
+#. translators: %s: directory
+#: includes/Export/Stages/InitializeStage.php:90
+#, php-format
+msgid "The storage directory %s is not writable. Fix its permissions and start the migration again."
+msgstr ""
+
+#. translators: %s: free space
+#: includes/Export/Stages/InitializeStage.php:101
+#, php-format
+msgid "Only %s of disk space is available. Free some space before exporting."
+msgstr ""
+
+#. translators: 1: free space, 2: estimated size
+#: includes/Export/Stages/InitializeStage.php:112
+#, php-format
+msgid "Free disk space (%1$s) is below the rough size estimate for this site (%2$s). The export continues, and will stop cleanly if the disk fills up."
+msgstr ""
+
+#: includes/Export/Stages/InitializeStage.php:136
+msgid "Environment checked"
+msgstr ""
+
+#: includes/Export/Stages/ScanStage.php:68
+msgid "Analysing the installation"
+msgstr ""
+
+#: includes/Export/Stages/ScanStage.php:102
+msgid "Database analysed"
+msgstr ""
+
+#. translators: 1: file count, 2: size
+#: includes/Export/Stages/ScanStage.php:134
+#, php-format
+msgid "Scanning files: %1$s found (%2$s)"
+msgstr ""
+
+#. translators: 1: file count, 2: size
+#: includes/Export/Stages/ScanStage.php:161
+#, php-format
+msgid "%1$s files found (%2$s)"
+msgstr ""
+
+#: includes/Export/Stages/VerifyStage.php:40
+msgid "Verifying the archive"
+msgstr ""
+
+#: includes/Export/Stages/VerifyStage.php:62
+msgid "The archive file is missing."
+msgstr ""
+
+#: includes/Export/Stages/VerifyStage.php:73
+#: includes/Export/Stages/VerifyStage.php:93
+#: includes/Import/Stages/ValidateStage.php:68
+#: includes/Import/Uploader.php:180
+msgid "Migration archive validation failed. The archive appears to be incomplete or corrupted."
+msgstr ""
+
+#: includes/Export/Stages/VerifyStage.php:82
+msgid "Archive verified (quick check)"
+msgstr ""
+
+#. translators: 1: entries checked, 2: total entries
+#: includes/Export/Stages/VerifyStage.php:105
+#, php-format
+msgid "Verifying: %1$s of %2$s entries"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/Export/Stages/VerifyStage.php:122
+#: includes/Import/Stages/ValidateStage.php:145
+#, php-format
+msgid "Archive verified (%s entries)"
+msgstr ""
+
+#: includes/Import/MaintenanceMode.php:118
+msgid "Website migration in progress. Please do not close this page."
+msgstr ""
+
+#: includes/Import/MaintenanceMode.php:129
+msgid "Migration in progress"
+msgstr ""
+
+#: includes/Import/MaintenanceMode.php:136
+msgid "The website will be back shortly."
+msgstr ""
+
+#: includes/Import/Stages/CompatibilityStage.php:76
+msgid "Running post migration tasks"
+msgstr ""
+
+#: includes/Import/Stages/CompatibilityStage.php:129
+msgid "Post migration tasks completed"
+msgstr ""
+
+#. translators: %s: theme directory
+#: includes/Import/Stages/CompatibilityStage.php:155
+#, php-format
+msgid "The active theme \"%s\" is not present after the restore. WordPress will fall back to a default theme."
+msgstr ""
+
+#. translators: %s: plugin list
+#: includes/Import/Stages/CompatibilityStage.php:245
+#, php-format
+msgid "These plugins were active on the source site but their files are missing here, so they stay deactivated: %s"
+msgstr ""
+
+#: includes/Import/Stages/DatabaseStage.php:88
+msgid "Restoring the database"
+msgstr ""
+
+#: includes/Import/Stages/DatabaseStage.php:109
+msgid "Database restore skipped"
+msgstr ""
+
+#: includes/Import/Stages/DatabaseStage.php:131
+msgid "Database plan prepared"
+msgstr ""
+
+#. translators: %d: number of tables
+#: includes/Import/Stages/DatabaseStage.php:145
+#, php-format
+msgid "%d existing tables removed"
+msgstr ""
+
+#. translators: 1: tables restored, 2: total tables
+#: includes/Import/Stages/DatabaseStage.php:161
+#, php-format
+msgid "Restoring database: %1$d of %2$d tables"
+msgstr ""
+
+#. translators: %d: number of tables
+#: includes/Import/Stages/DatabaseStage.php:185
+#, php-format
+msgid "%d database tables restored"
+msgstr ""
+
+#: includes/Import/Stages/DatabaseStage.php:201
+msgid "The archive contains no database metadata."
+msgstr ""
+
+#: includes/Import/Stages/DatabaseStage.php:205
+msgid "The database metadata in the archive could not be parsed."
+msgstr ""
+
+#. translators: 1: trigger name, 2: error
+#: includes/Import/Stages/DatabaseStage.php:378
+#, php-format
+msgid "Trigger %1$s could not be restored: %2$s"
+msgstr ""
+
+#: includes/Import/Stages/FilesStage.php:48
+msgid "Restoring files"
+msgstr ""
+
+#: includes/Import/Stages/FilesStage.php:69
+msgid "File restore skipped"
+msgstr ""
+
+#. translators: 1: file count, 2: size
+#: includes/Import/Stages/FilesStage.php:163
+#, php-format
+msgid "%1$s files restored (%2$s)"
+msgstr ""
+
+#. translators: 1: restored, 2: total, 3: size
+#: includes/Import/Stages/FilesStage.php:180
+#, php-format
+msgid "Restoring files: %1$s of %2$s (%3$s)"
+msgstr ""
+
+#. translators: %s: directory
+#: includes/Import/Stages/FilesStage.php:303
+#, php-format
+msgid "Cannot create directory %s. Check the filesystem permissions and resume the migration."
+msgstr ""
+
+#. translators: 1: link, 2: target
+#: includes/Import/Stages/FilesStage.php:354
+#, php-format
+msgid "Symlink %1$s was not recreated because it points outside the installation (%2$s)."
+msgstr ""
+
+#. translators: %s: file path
+#: includes/Import/Stages/FilesStage.php:398
+#, php-format
+msgid "Cannot write %s. Check the filesystem permissions and resume the migration."
+msgstr ""
+
+#. translators: %s: file path
+#: includes/Import/Stages/FilesStage.php:430
+#, php-format
+msgid "Checksum mismatch while restoring %s: the archive is corrupted. Nothing further has been written."
+msgstr ""
+
+#: includes/Import/Stages/FinalizeStage.php:38
+#: includes/Import/Stages/ReplaceFinalizeStage.php:36
+msgid "Finishing up"
+msgstr ""
+
+#: includes/Import/Stages/FinalizeStage.php:90
+msgid "Migration completed"
+msgstr ""
+
+#. translators: %s: user login
+#: includes/Import/Stages/FinalizeStage.php:121
+#, php-format
+msgid "The account \"%s\" does not exist in the restored database. Sign in with the credentials from the source site."
+msgstr ""
+
+#: includes/Import/Stages/InitializeStage.php:40
+msgid "Preparing the restore"
+msgstr ""
+
+#: includes/Import/Stages/InitializeStage.php:64
+msgid "The migration archive could not be found."
+msgstr ""
+
+#: includes/Import/Stages/InitializeStage.php:67
+msgid "Migration archives must live inside the plugin storage directory."
+msgstr ""
+
+#: includes/Import/Stages/InitializeStage.php:70
+msgid "The restore was not confirmed."
+msgstr ""
+
+#: includes/Import/Stages/InitializeStage.php:74
+msgid "The plugin storage directory is not writable."
+msgstr ""
+
+#. translators: %s: directory
+#: includes/Import/Stages/InitializeStage.php:80
+#, php-format
+msgid "%s is not writable, so files cannot be restored."
+msgstr ""
+
+#: includes/Import/Stages/InitializeStage.php:104
+msgid "Maintenance mode could not be enabled: the WordPress root directory is not writable. The restore continues."
+msgstr ""
+
+#: includes/Import/Stages/InitializeStage.php:117
+msgid "Destination prepared"
+msgstr ""
+
+#: includes/Import/Stages/ReplaceFinalizeStage.php:67
+msgid "Preview complete, nothing was written"
+msgstr ""
+
+#: includes/Import/Stages/ReplaceFinalizeStage.php:68
+msgid "Replacement complete"
+msgstr ""
+
+#: includes/Import/Stages/ReplaceInitializeStage.php:70
+msgid "Preparing the replacement"
+msgstr ""
+
+#: includes/Import/Stages/ReplaceInitializeStage.php:96
+msgid "Nothing to search for."
+msgstr ""
+
+#: includes/Import/Stages/ReplaceInitializeStage.php:99
+msgid "The search term is too short. Use at least four characters so the replacement cannot run away with your content."
+msgstr ""
+
+#: includes/Import/Stages/ReplaceInitializeStage.php:102
+msgid "The search and replace values are identical."
+msgstr ""
+
+#: includes/Import/Stages/ReplaceInitializeStage.php:122
+msgid "Replacement prepared"
+msgstr ""
+
+#: includes/Import/Stages/ReplaceStage.php:72
+msgid "Replacing"
+msgstr ""
+
+#. translators: 1: tables done, 2: total tables
+#: includes/Import/Stages/ReplaceStage.php:133
+#, php-format
+msgid "Scanning table %1$d of %2$d"
+msgstr ""
+
+#. translators: 1: values changed, 2: rows scanned
+#: includes/Import/Stages/ReplaceStage.php:155
+#, php-format
+msgid "%1$s values changed in %2$s rows"
+msgstr ""
+
+#: includes/Import/Stages/RollbackPointStage.php:80
+msgid "Creating a rollback point"
+msgstr ""
+
+#. translators: 1: free space, 2: database size
+#: includes/Import/Stages/RollbackPointStage.php:118
+#, php-format
+msgid "Not enough free disk space (%1$s) for a rollback point of the current database (%2$s). The restore continues without one."
+msgstr ""
+
+#: includes/Import/Stages/RollbackPointStage.php:124
+msgid "Rollback point skipped (insufficient disk space)"
+msgstr ""
+
+#: includes/Import/Stages/RollbackPointStage.php:229
+msgid "Rollback point created"
+msgstr ""
+
+#. translators: 1: current table, 2: total tables
+#: includes/Import/Stages/RollbackPointStage.php:235
+#, php-format
+msgid "Backing up the current database: %1$d of %2$d tables"
+msgstr ""
+
+#: includes/Import/Stages/UrlStage.php:74
+msgid "Updating URLs"
+msgstr ""
+
+#: includes/Import/Stages/UrlStage.php:98
+msgid "No source URL recorded, nothing to replace"
+msgstr ""
+
+#: includes/Import/Stages/UrlStage.php:104
+msgid "Source and destination are identical, no replacement needed"
+msgstr ""
+
+#. translators: 1: tables done, 2: total tables, 3: values changed
+#: includes/Import/Stages/UrlStage.php:133
+#, php-format
+msgid "Replacing URLs: %1$d of %2$d tables, %3$s values updated"
+msgstr ""
+
+#. translators: %d: number of values
+#: includes/Import/Stages/UrlStage.php:161
+#, php-format
+msgid "%d serialized values could not be parsed and were left untouched. They are listed in the migration report."
+msgstr ""
+
+#. translators: %d: number of references
+#: includes/Import/Stages/UrlStage.php:170
+#, php-format
+msgid "%d references to the source domain remain. They were left alone on purpose: review them in the migration report and replace them only if they are meant to point at this site."
+msgstr ""
+
+#. translators: 1: values changed, 2: rows scanned
+#: includes/Import/Stages/UrlStage.php:179
+#, php-format
+msgid "%1$s values updated across %2$s rows"
+msgstr ""
+
+#: includes/Import/Stages/ValidateStage.php:40
+msgid "Validating the archive"
+msgstr ""
+
+#: includes/Import/Stages/ValidateStage.php:104
+msgid "Archive structure verified"
+msgstr ""
+
+#: includes/Import/Stages/ValidateStage.php:118
+msgid "Migration archive validation failed. The archive appears to be incomplete or corrupted. Nothing has been changed on this site."
+msgstr ""
+
+#. translators: 1: entries checked, 2: total
+#: includes/Import/Stages/ValidateStage.php:130
+#, php-format
+msgid "Verifying archive: %1$s of %2$s entries"
+msgstr ""
+
+#. translators: 1: source PHP version, 2: destination PHP version
+#: includes/Import/Stages/ValidateStage.php:164
+#, php-format
+msgid "The source site ran PHP %1$s and this server runs PHP %2$s. Some plugins may require the newer version."
+msgstr ""
+
+#: includes/Import/Stages/ValidateStage.php:175
+msgid "This archive was created from a WordPress multisite network. Restoring it onto a single site installation is not supported, because the network tables and per-site content cannot be represented safely."
+msgstr ""
+
+#: includes/Import/Stages/ValidateStage.php:180
+msgid "This archive was created from a single site installation and this destination is a multisite network. Restoring it here would break the network tables."
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:75
+msgid "Verifying the restored site"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:118
+msgid "WordPress tables"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:128
+msgid "Home URL"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:134
+msgid "Site URL"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:142
+msgid "Active theme"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:151
+msgid "Plugins"
+msgstr ""
+
+#. translators: %d: number of plugins
+#: includes/Import/Stages/VerifyStage.php:156
+#, php-format
+msgid "%d active"
+msgstr ""
+
+#. translators: %s: plugin list
+#: includes/Import/Stages/VerifyStage.php:161
+#, php-format
+msgid "missing: %s"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:169
+msgid "Uploads directory"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:176
+msgid "Rewrite rules"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:178
+msgid "scheduled for regeneration"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:186
+msgid "data present, CSS cache cleared"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:194
+msgid "tables present, sessions cleared"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:202
+msgid "field groups present"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:210
+msgid "Remaining source URLs"
+msgstr ""
+
+#. translators: %d: number of references
+#: includes/Import/Stages/VerifyStage.php:214
+#, php-format
+msgid "%d references kept for review"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:228
+msgid "WP_HOME / WP_SITEURL constants"
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:231
+msgid "wp-config.php defines the site URL; it overrides the database and must match the destination."
+msgstr ""
+
+#. translators: %s: list of checks
+#: includes/Import/Stages/VerifyStage.php:255
+#, php-format
+msgid "Some post migration checks did not pass: %s. The site has been restored; review the report."
+msgstr ""
+
+#: includes/Import/Stages/VerifyStage.php:263
+msgid "All post migration checks passed"
+msgstr ""
+
+#. translators: %d: number of failed checks
+#: includes/Import/Stages/VerifyStage.php:266
+#, php-format
+msgid "Restored with %d checks to review"
+msgstr ""
+
+#: includes/Import/Uploader.php:69
+msgid "The upload directory is not writable."
+msgstr ""
+
+#. translators: 1: expected offset, 2: received offset
+#: includes/Import/Uploader.php:104
+#, php-format
+msgid "Upload out of sequence: expected offset %1$d but received %2$d. Resume from the reported offset."
+msgstr ""
+
+#: includes/Import/Uploader.php:113
+msgid "The uploaded chunk could not be read."
+msgstr ""
+
+#: includes/Import/Uploader.php:118
+msgid "The upload file could not be written."
+msgstr ""
+
+#: includes/Import/Uploader.php:131
+msgid "Writing the upload failed. The disk may be full."
+msgstr ""
+
+#. translators: 1: expected size, 2: received size
+#: includes/Import/Uploader.php:168
+#, php-format
+msgid "The upload is incomplete: expected %1$d bytes but received %2$d."
+msgstr ""
+
+#: includes/Import/Uploader.php:186
+msgid "The uploaded archive could not be moved into the storage directory."
+msgstr ""
+
+#: includes/Import/Uploader.php:234
+msgid "The archive file does not exist."
+msgstr ""
+
+#: includes/Import/Uploader.php:248
+msgid "The archive could not be moved into the storage directory."
+msgstr ""
+
+#: includes/Import/Uploader.php:268
+msgid "The uploaded file could not be read."
+msgstr ""
+
+#: includes/Import/Uploader.php:275
+msgid "This file is not an SH Clone Migration archive. Only .wpress files created by this plugin can be restored."
+msgstr ""
+
+#: includes/Import/Uploader.php:357
+msgid "Invalid upload identifier."
+msgstr ""
+
+#: includes/Import/Uploader.php:373
+msgid "This upload is unknown or has expired. Start it again."
+msgstr ""
+
+#: includes/Import/Uploader.php:376
+msgid "This upload belongs to another user."
+msgstr ""
+
+#: includes/Jobs/JobRunner.php:258
+msgid "Migration completed."
+msgstr ""
+
+#: includes/Jobs/JobRunner.php:285
+msgid "Review the migration log, resolve the problem and resume or restart the job."
+msgstr ""
+
+#: includes/Jobs/JobRunner.php:309
+msgid "Migration cancelled."
+msgstr ""
+
+#: includes/Jobs/Scheduler.php:63
+msgid "Every minute (SH Clone Migration)"
+msgstr ""
+
+#: includes/Security/Request.php:38
+msgid "You must be signed in to run a migration."
+msgstr ""
+
+#: includes/Security/Request.php:44
+#: includes/Security/Request.php:74
+msgid "You do not have permission to run migrations on this site."
+msgstr ""
+
+#: includes/Security/Request.php:52
+msgid "Your session expired. Reload the page and try again."
+msgstr ""
+
+#: includes/Security/Request.php:67
+msgid "Authentication required."
+msgstr ""

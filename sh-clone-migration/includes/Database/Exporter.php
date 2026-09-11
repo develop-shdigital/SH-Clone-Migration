@@ -123,9 +123,8 @@ class Exporter {
 		$insert_head = 'INSERT INTO ' . $quoted . ' (' . $column_list . ') VALUES ';
 		$max_bytes   = (int) $this->options['max_insert_bytes'];
 
-		$buffer      = '';
-		$buffer_rows = 0;
-		$batches     = 0;
+		$buffer  = '';
+		$batches = 0;
 
 		while ( $budget->shouldContinue( $batches ) ) {
 			++$batches;
@@ -144,11 +143,9 @@ class Exporter {
 
 				if ( '' !== $buffer && strlen( $buffer ) + strlen( $tuple ) + 2 > $max_bytes ) {
 					call_user_func( $sink, $insert_head . $buffer . ";\n" );
-					$buffer      = '';
-					$buffer_rows = 0;
+					$buffer = '';
 				}
 				$buffer .= ( '' === $buffer ? '' : ',' ) . $tuple;
-				++$buffer_rows;
 				++$state['rows'];
 			}
 

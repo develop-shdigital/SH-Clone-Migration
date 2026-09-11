@@ -140,10 +140,29 @@ class Importer {
 			if ( in_array( $errno, self::$ignorable, true ) ) {
 				return false;
 			}
+			// A statement larger than max_allowed_packet is the one failure
+			// with an obvious remedy, so say so instead of quoting MySQL.
+			if ( in_array( $errno, array( 1153, 2006, 2013 ), true ) ) {
+				$packet = $this->maxAllowedPacket();
+				throw new \RuntimeException(
+					sprintf(
+						'A statement of %1$s could not be sent to the database while restoring %2$s. '
+						. 'This server accepts at most %3$s per statement (max_allowed_packet). '
+						. 'Raise max_allowed_packet on the destination database and resume the migration. '
+						. 'MySQL reported: %4$s',
+						size_format( strlen( $sql ) ),
+						$this->statementTarget( $sql ),
+						$packet > 0 ? size_format( $packet ) : 'an unknown amount',
+						$this->lastError()
+					)
+				);
+			}
+
 			throw new \RuntimeException(
 				sprintf(
-					'Database error %1$d while restoring: %2$s (statement started with: %3$s)',
+					'Database error %1$d while restoring %2$s: %3$s (statement started with: %4$s)',
 					$errno,
+					$this->statementTarget( $sql ),
 					$this->lastError(),
 					substr( preg_replace( '/\s+/', ' ', $sql ), 0, 160 )
 				)
@@ -152,6 +171,19 @@ class Importer {
 
 		++$this->executed;
 		return true;
+	}
+
+	/**
+	 * The table a statement is about, for error messages.
+	 *
+	 * @param string $sql Statement.
+	 * @return string
+	 */
+	protected function statementTarget( $sql ) {
+		if ( preg_match( '/`((?:[^`]|``)*)`/', $sql, $matches ) ) {
+			return $matches[1];
+		}
+		return 'the database';
 	}
 
 	/**

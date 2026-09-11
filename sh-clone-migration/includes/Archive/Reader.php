@@ -512,9 +512,7 @@ class Reader {
 	 * @return array position and done flag.
 	 */
 	public function streamFrom( array $entry, $raw_offset, $max_bytes, callable $callback ) {
-		$block_size = isset( $this->prologue['block_size'] ) ? (int) $this->prologue['block_size'] : Format::DEFAULT_BLOCK_SIZE;
-		$position   = 0;
-		$index      = 0;
+		$position = 0;
 
 		// Locate the block containing $raw_offset by walking block headers.
 		$offset = $entry['payload_offset'];
@@ -532,7 +530,6 @@ class Reader {
 			}
 			$position += $raw;
 			$offset   += 9 + $stored;
-			++$index;
 		}
 
 		$this->seek( $offset );

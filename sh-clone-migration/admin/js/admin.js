@@ -159,6 +159,7 @@
 		this.message = $( '[data-role="overall-message"]', root );
 		this.stages = $( '[data-role="stages"]', root );
 		this.facts = $( '[data-role="facts"]', root );
+		this.groups = null;
 		this.log = $( '[data-role="log"]', root );
 		this.title = $( '#shcm-progress-title' );
 	}
@@ -243,13 +244,57 @@
 			facts.push( [ 'Values updated', formatNumber( report.urls.stats.values_changed ) ] );
 		}
 
-		var groups = report.files_progress || {};
-		Object.keys( groups ).forEach( function ( group ) {
-			facts.push( [ group, formatNumber( groups[ group ].files ) + ' / ' + formatBytes( groups[ group ].bytes ) ] );
-		} );
-
 		this.facts.innerHTML = facts.map( function ( fact ) {
 			return '<span>' + escapeHtml( fact[ 0 ] ) + ': <strong>' + escapeHtml( fact[ 1 ] ) + '</strong></span>';
+		} ).join( '' );
+
+		this.renderGroups( report );
+	};
+
+	/**
+	 * Per-group progress, measured against the totals the scan produced.
+	 *
+	 * The scan counts every file before anything is written, so these bars
+	 * show real fractions rather than an animation.
+	 */
+	ProgressView.prototype.renderGroups = function ( report ) {
+		var container = this.groups;
+		if ( ! container ) {
+			container = document.createElement( 'div' );
+			container.className = 'shcm-groups';
+			this.facts.parentNode.insertBefore( container, this.facts );
+			this.groups = container;
+		}
+
+		var totals = ( report.file_totals && report.file_totals.groups ) || {};
+		var done = report.files_progress || {};
+		var names = Object.keys( totals );
+
+		if ( ! names.length ) {
+			container.innerHTML = '';
+			return;
+		}
+
+		var order = [ 'plugins', 'themes', 'mu-plugins', 'uploads', 'languages', 'other', 'core' ];
+		names.sort( function ( a, b ) {
+			var ai = order.indexOf( a );
+			var bi = order.indexOf( b );
+			return ( ai < 0 ? 99 : ai ) - ( bi < 0 ? 99 : bi );
+		} );
+
+		container.innerHTML = names.map( function ( name ) {
+			var total = totals[ name ] || { files: 0, bytes: 0 };
+			var made = done[ name ] || { files: 0, bytes: 0 };
+			var percent = total.bytes > 0
+				? Math.min( 100, ( made.bytes / total.bytes ) * 100 )
+				: ( total.files > 0 ? Math.min( 100, ( made.files / total.files ) * 100 ) : 0 );
+
+			return '<div class="shcm-group">' +
+				'<span class="shcm-group__label">' + escapeHtml( name ) + '</span>' +
+				'<span class="shcm-bar"><span class="shcm-bar__fill" style="width:' + percent + '%"></span></span>' +
+				'<span class="shcm-group__count">' + formatNumber( made.files ) + ' / ' + formatNumber( total.files ) + '</span>' +
+				'<span class="shcm-group__percent">' + percent.toFixed( 0 ) + '%</span>' +
+				'</div>';
 		} ).join( '' );
 	};
 

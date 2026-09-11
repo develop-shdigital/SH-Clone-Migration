@@ -235,6 +235,7 @@ class Scanner {
 			$is_link = is_link( $child_abs );
 			if ( $is_link ) {
 				$target = @readlink( $child_abs );
+				$group  = Paths::group( $root, $child_rel );
 				$this->files->push(
 					array(
 						'root'   => $root,
@@ -244,10 +245,11 @@ class Scanner {
 						'mtime'  => (int) @filemtime( $child_abs ),
 						'mode'   => 0777,
 						'target' => (string) $target,
-						'group'  => Paths::group( $root, $child_rel ),
+						'group'  => $group,
 					)
 				);
 				$state['totals']['files']++;
+				$this->countGroup( $state, $group, 0 );
 				continue;
 			}
 
@@ -293,19 +295,13 @@ class Scanner {
 
 			$state['totals']['files']++;
 			$state['totals']['bytes'] += $size;
-			if ( ! isset( $state['totals']['groups'][ $group ] ) ) {
-				$state['totals']['groups'][ $group ] = array(
-					'files' => 0,
-					'bytes' => 0,
-				);
-			}
-			$state['totals']['groups'][ $group ]['files']++;
-			$state['totals']['groups'][ $group ]['bytes'] += $size;
+			$this->countGroup( $state, $group, $size );
 		}
 		closedir( $handle );
 
 		// Preserve empty directories so the restored tree matches the source.
 		if ( 0 === $children && '' !== $relative ) {
+			$group = Paths::group( $root, $relative );
 			$this->files->push(
 				array(
 					'root'  => $root,
@@ -314,10 +310,38 @@ class Scanner {
 					'size'  => 0,
 					'mtime' => (int) @filemtime( $absolute ),
 					'mode'  => (int) @fileperms( $absolute ),
-					'group' => Paths::group( $root, $relative ),
+					'group' => $group,
 				)
 			);
+			$state['totals']['files']++;
+			$this->countGroup( $state, $group, 0 );
 		}
+	}
+
+	/**
+	 * Count one archive entry against its reporting group.
+	 *
+	 * Directories and symlinks are counted as well as files, so the totals the
+	 * scan produces match the entries an import will actually process and the
+	 * progress bars land on exactly 100%.
+	 *
+	 * @param array  $state State (by reference).
+	 * @param string $group Group.
+	 * @param int    $bytes Bytes.
+	 * @return void
+	 */
+	protected function countGroup( array &$state, $group, $bytes ) {
+		if ( '' === $group ) {
+			$group = 'other';
+		}
+		if ( ! isset( $state['totals']['groups'][ $group ] ) ) {
+			$state['totals']['groups'][ $group ] = array(
+				'files' => 0,
+				'bytes' => 0,
+			);
+		}
+		$state['totals']['groups'][ $group ]['files']++;
+		$state['totals']['groups'][ $group ]['bytes'] += $bytes;
 	}
 
 	/**

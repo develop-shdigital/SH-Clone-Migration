@@ -220,6 +220,7 @@ wp shcm list
 wp shcm status [<job>]
 wp shcm resume <job>
 wp shcm cancel <job>
+wp shcm rollback <job> --yes                    # undo an import
 wp shcm search-replace https://old.test https://new.test --dry-run
 wp shcm doctor                                  # system status report
 ```
@@ -344,9 +345,10 @@ These are environmental, not artificial:
   round, because that cannot be done safely. Moving one subsite out of a
   network is not supported.
 - **Files are not rolled back.** The rollback point is a full database
-  snapshot. Files are restored in place, so a failed restore may leave new
-  files on disk. Take a full export as a safety backup first — the Import
-  screen links to it.
+  snapshot, and `wp shcm rollback <job>` (or the button a failed restore
+  offers) puts it back. Files are restored in place, so a failed restore may
+  leave new files on disk. Take a full export as a safety backup first — the
+  Import screen links to it.
 - **File contents are not rewritten.** URLs inside a `.css` or `.js` file that
   was written by hand are migrated as they are. Generated CSS (Elementor and
   friends) is cleared so it regenerates against the new URL.

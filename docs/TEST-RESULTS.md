@@ -267,6 +267,20 @@ Tested separately against the same pair of sites:
 | Rollback point | Created before the database was replaced |
 | Operator account missing from the restored database | Warned: "Sign in with the credentials from the source site." |
 
+### Controlled (merge) import mode
+
+A destination carrying its own table was imported with `--mode=merge`:
+
+| | Before | After |
+|---|---|---|
+| Tables | 13 | 51 (50 from the archive plus the local one) |
+| `wpdst_local_only` | 1 row, `keep me` | **1 row, `keep me`** |
+| Posts | 4 | 62 |
+| Site name | Destination Site | Source Clone Test |
+
+Tables the archive contains are replaced; tables it does not are left alone,
+which is what the mode promises.
+
 ### Rollback
 
 After a successful restore, `wp shcm rollback <job> --yes` was used to undo it.

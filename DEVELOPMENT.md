@@ -181,7 +181,8 @@ the migration capability.
 
 All under `wp_ajax_shcm_*`, all requiring the capability and the
 `shcm_migration` nonce: `start_export`, `start_import`, `start_replace`,
-`tick`, `status`, `cancel`, `delete_job`, `jobs`, `resumable`, `archives`,
+`start_rollback`, `tick`, `status`, `cancel`, `delete_job`, `jobs`,
+`resumable`, `archives`,
 `archive_details`, `delete_archive`, `verify_archive`, `save_settings`,
 `system_status`, `upload_begin`, `upload_chunk`, `upload_status`,
 `upload_finish`, `upload_abort`, `adopt_archive`.

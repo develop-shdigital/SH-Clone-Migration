@@ -108,6 +108,7 @@ asserts that `home` and `siteurl` match the destination and warns if
 `wp shcm list`
 `wp shcm status`
 `wp shcm resume <job>`
+`wp shcm rollback <job>`
 `wp shcm search-replace https://old.test https://new.test --dry-run`
 `wp shcm doctor`
 

@@ -72,6 +72,18 @@ class ValidateStage extends AbstractStage {
 
 			$manifest = $structure['manifest'];
 			$job->setShared( 'manifest', $manifest );
+			if ( isset( $manifest['files'] ) && is_array( $manifest['files'] ) ) {
+				// The same shape the export scan produces, so the progress
+				// view can draw per-group bars for a restore too.
+				$job->setShared(
+					'file_totals',
+					array(
+						'files'  => isset( $manifest['files']['count'] ) ? (int) $manifest['files']['count'] : 0,
+						'bytes'  => isset( $manifest['files']['size'] ) ? (int) $manifest['files']['size'] : 0,
+						'groups' => isset( $manifest['files']['groups'] ) ? (array) $manifest['files']['groups'] : array(),
+					)
+				);
+			}
 			$job->setShared( 'source', isset( $manifest['site']['home'] ) ? untrailingslashit( $manifest['site']['home'] ) : '' );
 			$job->setShared( 'source_prefix', isset( $manifest['wordpress']['table_prefix'] ) ? $manifest['wordpress']['table_prefix'] : '' );
 
