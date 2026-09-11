@@ -1,0 +1,19 @@
+# Composer
+/sh-clone-migration/vendor/
+/sh-clone-migration/composer.lock
+
+# PHPUnit
+/sh-clone-migration/.phpunit.cache/
+/sh-clone-migration/.phpunit.result.cache
+
+# Build output
+/build/
+*.zip
+*.wpress
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
