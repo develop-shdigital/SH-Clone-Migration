@@ -94,6 +94,7 @@ class Uploader {
 			// without writing it twice.
 			$meta['received'] = $current;
 			$this->writeMeta( $id, $meta );
+			unset( $meta['hash'] );
 			return $meta;
 		}
 
@@ -118,6 +119,11 @@ class Uploader {
 			throw new \RuntimeException( __( 'The upload file could not be written.', 'sh-clone-migration' ) );
 		}
 
+		// The SHA-256 of the whole upload is built chunk by chunk, so it is
+		// ready the moment the last chunk lands and can be compared with the
+		// one the source site showed after its export.
+		$context = $this->hashContext( $meta, $current );
+
 		$written = 0;
 		while ( ! feof( $in ) ) {
 			$buffer = fread( $in, 1048576 );
@@ -125,10 +131,15 @@ class Uploader {
 				break;
 			}
 			$bytes = fwrite( $out, $buffer );
-			if ( false === $bytes ) {
+			if ( false === $bytes || strlen( $buffer ) !== $bytes ) {
 				fclose( $in );
 				fclose( $out );
+				// Leave the part file exactly as it was before this chunk.
+				$this->truncatePart( $path, $current );
 				throw new \RuntimeException( __( 'Writing the upload failed. The disk may be full.', 'sh-clone-migration' ) );
+			}
+			if ( null !== $context ) {
+				hash_update( $context, $buffer );
 			}
 			$written += $bytes;
 		}
@@ -138,7 +149,10 @@ class Uploader {
 
 		$meta['received'] = (int) @filesize( $path );
 		$meta['updated']  = time();
+		$meta['hash']     = null === $context ? '' : base64_encode( serialize( $context ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions
+		$meta['hashed']   = null === $context ? 0 : $meta['received'];
 		$this->writeMeta( $id, $meta );
+		unset( $meta['hash'] );
 
 		if ( 0 === $offset ) {
 			// Reject anything that is not one of our archives as early as
@@ -181,18 +195,67 @@ class Uploader {
 			);
 		}
 
+		$digest  = '';
+		$context = $this->hashContext( $meta, $size );
+		if ( null !== $context && ! empty( $meta['hashed'] ) && (int) $meta['hashed'] === $size ) {
+			$digest = hash_final( $context );
+		}
+
 		$target = $this->uniqueArchivePath( $meta['name'] );
 		if ( ! @rename( $path, $target ) ) {
 			throw new \RuntimeException( __( 'The uploaded archive could not be moved into the storage directory.', 'sh-clone-migration' ) );
 		}
 		@chmod( $target, 0640 );
 		$this->deleteMeta( $id );
+		if ( '' !== $digest ) {
+			\SHCM\Archive\Catalog::writeChecksum( $target, $digest );
+		}
 
 		return array(
-			'name' => basename( $target ),
-			'path' => $target,
-			'size' => (int) @filesize( $target ),
+			'name'   => basename( $target ),
+			'path'   => $target,
+			'size'   => (int) @filesize( $target ),
+			'sha256' => $digest,
 		);
+	}
+
+	/**
+	 * The running SHA-256 of an upload, or null when this PHP build cannot
+	 * carry a hash context from one request to the next (or the upload
+	 * began without one).
+	 *
+	 * @param array $meta     Upload descriptor.
+	 * @param int   $received Bytes actually in the part file.
+	 * @return \HashContext|null
+	 */
+	protected function hashContext( array $meta, $received ) {
+		if ( ! \SHCM\Archive\FileDigest::resumable() ) {
+			return null;
+		}
+		$received = (int) $received;
+		if ( 0 === $received ) {
+			return hash_init( 'sha256' );
+		}
+		if ( empty( $meta['hash'] ) || ! isset( $meta['hashed'] ) || (int) $meta['hashed'] !== $received ) {
+			return null;
+		}
+		$context = @unserialize( base64_decode( (string) $meta['hash'] ), array( 'allowed_classes' => array( 'HashContext' ) ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions
+		return $context instanceof \HashContext ? $context : null;
+	}
+
+	/**
+	 * Cut a part file back to a size.
+	 *
+	 * @param string $path Part file.
+	 * @param int    $size Size.
+	 * @return void
+	 */
+	protected function truncatePart( $path, $size ) {
+		$handle = @fopen( $path, 'r+b' );
+		if ( $handle ) {
+			ftruncate( $handle, max( 0, (int) $size ) );
+			fclose( $handle );
+		}
 	}
 
 	/**
@@ -204,6 +267,7 @@ class Uploader {
 	public function status( $id ) {
 		$meta             = $this->meta( $id );
 		$meta['received'] = (int) @filesize( $this->partPath( $id ) );
+		unset( $meta['hash'] );
 		return $meta;
 	}
 

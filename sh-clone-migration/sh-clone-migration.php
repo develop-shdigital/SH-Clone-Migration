@@ -3,7 +3,7 @@
  * Plugin Name: SH Clone Migration
  * Plugin URI: https://github.com/develop-shdigital/SH-Clone-Migration
  * Description: Complete WordPress website cloning and migration system. Exports an entire site (database + files) into a single portable .wpress archive and restores it on any other WordPress installation.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: SH
  * License: GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -17,7 +17,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'SHCM_VERSION', '1.0.0' );
+define( 'SHCM_VERSION', '1.0.1' );
 define( 'SHCM_PLUGIN_FILE', __FILE__ );
 define( 'SHCM_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SHCM_PLUGIN_URL', plugin_dir_url( __FILE__ ) );

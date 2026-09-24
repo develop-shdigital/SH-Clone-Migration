@@ -15,8 +15,12 @@ defined( 'ABSPATH' ) || exit;
  * Produces a MySQL compatible dump one batch of rows at a time.
  *
  * No table is ever loaded into memory as a whole: rows are read in adaptive
- * batches (keyset paginated when the table has a single numeric key) and
- * handed straight to a sink that writes them into the archive.
+ * batches and handed straight to a sink that writes them into the archive.
+ * Tables with a primary key (or a unique key over NOT NULL columns) are
+ * walked in key order with keyset pagination, so a row written or deleted
+ * elsewhere while the table is being paged can neither shift other rows out
+ * of the dump nor duplicate them. Only tables without such a key fall back to
+ * OFFSET paging, still in a fully determined order.
  */
 class Exporter {
 
@@ -94,6 +98,10 @@ class Exporter {
 	/**
 	 * Dump a batch of rows.
 	 *
+	 * A read error never ends the table: it is reported in $state['error']
+	 * with the cursor left on the last row that was written, so the caller
+	 * can retry from exactly that point.
+	 *
 	 * @param string   $table  Table name.
 	 * @param array    $state  Resume state.
 	 * @param Budget   $budget Budget.
@@ -101,22 +109,31 @@ class Exporter {
 	 * @return array Updated state.
 	 */
 	public function dumpRows( $table, array $state, Budget $budget, callable $sink ) {
-		$columns = isset( $state['columns'] ) ? $state['columns'] : null;
-		if ( null === $columns ) {
-			$columns          = $this->inspector->columns( $table );
+		unset( $state['error'] );
+
+		if ( ! isset( $state['columns'] ) ) {
+			try {
+				$columns = $this->inspector->columns( $table );
+				if ( empty( $columns ) ) {
+					throw new DatabaseReadException( sprintf( 'Reading the columns of table %s failed: no columns were returned.', $table ) );
+				}
+				$keys = $this->inspector->keyColumns( $table );
+			} catch ( DatabaseReadException $e ) {
+				$state['error'] = $e->getMessage();
+				return $state;
+			}
+
 			$state['columns'] = $columns;
-			$state['keyset']  = $this->inspector->keysetColumn( $table, $columns );
+			$state['keys']    = $this->pageableKeys( $keys, $columns );
+			$state['order']   = empty( $state['keys'] ) ? $this->fallbackOrder( $columns ) : array();
 			$state['cursor']  = null;
 			$state['offset']  = 0;
 			$state['rows']    = 0;
+			$state['bytes']   = 0;
 			$state['batch']   = $this->batchSize( $table );
 		}
 
-		if ( empty( $columns ) ) {
-			$state['done'] = true;
-			return $state;
-		}
-
+		$columns     = $state['columns'];
 		$names       = array_keys( $columns );
 		$column_list = implode( ', ', array_map( array( $this, 'quoteName' ), $names ) );
 		$quoted      = $this->quoteName( $table );
@@ -125,10 +142,19 @@ class Exporter {
 
 		$buffer  = '';
 		$batches = 0;
+		$emit    = static function ( $sql ) use ( $sink, &$state ) {
+			$state['bytes'] = (int) $state['bytes'] + strlen( $sql );
+			call_user_func( $sink, $sql );
+		};
 
 		while ( $budget->shouldContinue( $batches ) ) {
 			++$batches;
-			$rows = $this->fetchBatch( $table, $state );
+			try {
+				$rows = $this->fetchBatch( $table, $state );
+			} catch ( DatabaseReadException $e ) {
+				$state['error'] = $e->getMessage();
+				break;
+			}
 			if ( empty( $rows ) ) {
 				$state['done'] = true;
 				break;
@@ -142,7 +168,7 @@ class Exporter {
 				$tuple = '(' . implode( ',', $values ) . ')';
 
 				if ( '' !== $buffer && strlen( $buffer ) + strlen( $tuple ) + 2 > $max_bytes ) {
-					call_user_func( $sink, $insert_head . $buffer . ";\n" );
+					$emit( $insert_head . $buffer . ";\n" );
 					$buffer = '';
 				}
 				$buffer .= ( '' === $buffer ? '' : ',' ) . $tuple;
@@ -159,10 +185,53 @@ class Exporter {
 		}
 
 		if ( '' !== $buffer ) {
-			call_user_func( $sink, $insert_head . $buffer . ";\n" );
+			$emit( $insert_head . $buffer . ";\n" );
 		}
 
 		return $state;
+	}
+
+	/**
+	 * Key columns that keyset pagination can safely walk.
+	 *
+	 * The comparison "key > last value" must order rows exactly like
+	 * ORDER BY does. That fails for approximate numbers (a FLOAT read back as
+	 * "0.1" is not equal to the stored value, so the same row would be read
+	 * forever), for ENUM/SET (sorted by position, compared as text), and for
+	 * TEXT/BLOB keys (sorted on their first max_sort_length bytes only).
+	 *
+	 * @param string[] $keys    Key columns.
+	 * @param array    $columns Column metadata.
+	 * @return string[]
+	 */
+	protected function pageableKeys( array $keys, array $columns ) {
+		foreach ( $keys as $key ) {
+			if ( ! isset( $columns[ $key ] ) ) {
+				return array();
+			}
+			if ( in_array( $columns[ $key ]['base_type'], array( 'float', 'double', 'real', 'enum', 'set', 'json', 'geometry', 'bit', 'tinytext', 'text', 'mediumtext', 'longtext', 'tinyblob', 'blob', 'mediumblob', 'longblob' ), true ) ) {
+				return array();
+			}
+		}
+		return array_values( $keys );
+	}
+
+	/**
+	 * ORDER BY columns for a table without a usable key: every column, so
+	 * that consecutive OFFSET pages see the rows in one fixed order.
+	 *
+	 * @param array $columns Column metadata.
+	 * @return string[]
+	 */
+	protected function fallbackOrder( array $columns ) {
+		$order = array();
+		foreach ( $columns as $name => $column ) {
+			if ( in_array( $column['base_type'], array( 'json', 'geometry', 'point', 'linestring', 'polygon', 'multipoint', 'multilinestring', 'multipolygon', 'geometrycollection' ), true ) ) {
+				continue;
+			}
+			$order[] = $name;
+		}
+		return $order;
 	}
 
 	/**
@@ -171,49 +240,71 @@ class Exporter {
 	 * @param string $table Table name.
 	 * @param array  $state Resume state (by reference).
 	 * @return array
+	 * @throws DatabaseReadException When the server reports an error.
 	 */
 	protected function fetchBatch( $table, array &$state ) {
 		$quoted = $this->quoteName( $table );
 		$limit  = max( 1, (int) $state['batch'] );
+		$keys   = isset( $state['keys'] ) ? (array) $state['keys'] : array();
 
-		if ( ! empty( $state['keyset'] ) ) {
-			$key = $this->quoteName( $state['keyset'] );
-			if ( null === $state['cursor'] ) {
-				$sql = "SELECT * FROM {$quoted} ORDER BY {$key} ASC LIMIT {$limit}";
-			} elseif ( is_int( $state['cursor'] ) || ctype_digit( (string) $state['cursor'] ) ) {
-				$sql = $this->db->prepare(
-					"SELECT * FROM {$quoted} WHERE {$key} > %d ORDER BY {$key} ASC LIMIT {$limit}", // phpcs:ignore WordPress.DB.PreparedSQL
-					(int) $state['cursor']
-				);
-			} else {
-				$sql = $this->db->prepare(
-					"SELECT * FROM {$quoted} WHERE {$key} > %s ORDER BY {$key} ASC LIMIT {$limit}", // phpcs:ignore WordPress.DB.PreparedSQL
-					$state['cursor']
-				);
-			}
+		if ( ! empty( $keys ) ) {
+			$order = implode( ', ', array_map( array( $this, 'quoteName' ), $keys ) );
+			$where = null === $state['cursor'] ? '' : ' WHERE ' . $this->keysetCondition( $keys, (array) $state['cursor'] );
+			$sql   = "SELECT * FROM {$quoted}{$where} ORDER BY {$order} LIMIT {$limit}";
 		} else {
 			$offset = (int) $state['offset'];
-			$sql    = "SELECT * FROM {$quoted} LIMIT {$limit} OFFSET {$offset}";
+			$order  = empty( $state['order'] ) ? '' : ' ORDER BY ' . implode( ', ', array_map( array( $this, 'quoteName' ), $state['order'] ) );
+			$sql    = "SELECT * FROM {$quoted}{$order} LIMIT {$limit} OFFSET {$offset}";
 		}
 
-		$rows = $this->db->get_results( $sql, ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL
-		if ( null === $rows ) {
-			throw new \RuntimeException(
-				sprintf( 'Reading table %1$s failed: %2$s', $table, $this->db->last_error )
-			);
-		}
+		$rows = $this->inspector->read( $sql, ARRAY_A, 'table ' . $table );
 		if ( empty( $rows ) ) {
 			return array();
 		}
 
-		if ( ! empty( $state['keyset'] ) ) {
-			$last            = $rows[ count( $rows ) - 1 ];
-			$state['cursor'] = $last[ $state['keyset'] ];
+		if ( ! empty( $keys ) ) {
+			$last   = $rows[ count( $rows ) - 1 ];
+			$cursor = array();
+			foreach ( $keys as $key ) {
+				// Stored as SQL literals: binary keys become hex, so the state
+				// stays plain ASCII whatever the key holds.
+				$cursor[] = $this->formatValue( $last[ $key ], $state['columns'][ $key ] );
+			}
+			$state['cursor'] = $cursor;
 		} else {
 			$state['offset'] = (int) $state['offset'] + count( $rows );
 		}
 
 		return $rows;
+	}
+
+	/**
+	 * WHERE clause selecting the rows after a key tuple.
+	 *
+	 * (k1, k2) > (v1, v2) is written out as k1 >= v1 AND (k1 > v1 OR
+	 * (k1 = v1 AND k2 > v2)) because older MySQL versions cannot use an index
+	 * for a row constructor comparison.
+	 *
+	 * @param string[] $keys   Key columns.
+	 * @param string[] $values SQL literals of the last row's key.
+	 * @return string
+	 */
+	public function keysetCondition( array $keys, array $values ) {
+		$quoted = array_map( array( $this, 'quoteName' ), $keys );
+		$terms  = array();
+		$count  = count( $quoted );
+		for ( $i = 0; $i < $count; $i++ ) {
+			$parts = array();
+			for ( $j = 0; $j < $i; $j++ ) {
+				$parts[] = $quoted[ $j ] . ' = ' . $values[ $j ];
+			}
+			$parts[] = $quoted[ $i ] . ' > ' . $values[ $i ];
+			$terms[] = '(' . implode( ' AND ', $parts ) . ')';
+		}
+		if ( 1 === $count ) {
+			return $terms[0];
+		}
+		return $quoted[0] . ' >= ' . $values[0] . ' AND (' . implode( ' OR ', $terms ) . ')';
 	}
 
 	/**
@@ -249,6 +340,11 @@ class Exporter {
 	public function formatValue( $value, array $column ) {
 		if ( null === $value ) {
 			return 'NULL';
+		}
+		if ( ! empty( $column['is_bit'] ) || 'bit' === $column['base_type'] ) {
+			// mysqlnd returns BIT values as decimal text ("0", "5"); a client
+			// library that returns the raw bytes gets a hex literal.
+			return ctype_digit( (string) $value ) ? (string) $value : '0x' . bin2hex( (string) $value );
 		}
 		if ( $column['is_binary'] ) {
 			return '' === $value ? "''" : '0x' . bin2hex( $value );
@@ -297,11 +393,12 @@ class Exporter {
 	/**
 	 * Trigger definitions rendered as executable statements.
 	 *
+	 * @param string[]|null $tables Keep only triggers on these tables.
 	 * @return array[] Each entry: name, sql.
 	 */
-	public function triggerStatements() {
+	public function triggerStatements( $tables = null ) {
 		$statements = array();
-		foreach ( $this->inspector->triggers() as $trigger ) {
+		foreach ( $this->inspector->triggers( $tables ) as $trigger ) {
 			$statements[] = array(
 				'name' => $trigger['name'],
 				'sql'  => sprintf(

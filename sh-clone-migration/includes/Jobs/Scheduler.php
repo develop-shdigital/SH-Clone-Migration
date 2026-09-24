@@ -131,6 +131,29 @@ class Scheduler {
 				$catalog->delete( $archive['name'] );
 			}
 		}
+
+		$this->purgeOrphanedSidecars( $storage->archives() );
+	}
+
+	/**
+	 * Remove checksum files and SHA-256 attempt markers whose archive is gone
+	 * (deleted over FTP, say), so they are not taken for another archive's.
+	 *
+	 * @param string $directory Archive directory.
+	 * @return int Files removed.
+	 */
+	protected function purgeOrphanedSidecars( $directory ) {
+		$removed = 0;
+		foreach ( array( '.sha256', '.sha256-attempt' ) as $suffix ) {
+			$items = glob( Paths::trailingslash( $directory ) . '*.' . \SHCM\Archive\Format::EXTENSION . $suffix );
+			foreach ( is_array( $items ) ? $items : array() as $sidecar ) {
+				$archive = substr( $sidecar, 0, -strlen( $suffix ) );
+				if ( ! file_exists( $archive ) && @unlink( $sidecar ) ) {
+					++$removed;
+				}
+			}
+		}
+		return $removed;
 	}
 
 	/**

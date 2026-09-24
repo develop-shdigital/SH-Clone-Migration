@@ -34,7 +34,12 @@ class SafePath {
 			return null;
 		}
 
-		$relative = str_replace( '\\', '/', $relative );
+		// Where the backslash is a directory separator (Windows) it must be
+		// treated as one before the ".." check. Elsewhere it is an ordinary
+		// character in a file name and is kept as such.
+		if ( '\\' === DIRECTORY_SEPARATOR ) {
+			$relative = str_replace( '\\', '/', $relative );
+		}
 
 		// Absolute paths and Windows drive letters.
 		if ( '/' === $relative[0] ) {
@@ -106,9 +111,11 @@ class SafePath {
 		}
 		$real_base = Paths::normalize( $real_base );
 
-		// Walk up to the closest existing ancestor and resolve that.
+		// Walk up to the closest existing ancestor and resolve that. A link
+		// counts as existing even when it dangles (file_exists() says no),
+		// because writing to it would create whatever it points at.
 		$candidate = $full;
-		while ( ! file_exists( $candidate ) ) {
+		while ( ! file_exists( $candidate ) && ! is_link( $candidate ) ) {
 			$parent = dirname( $candidate );
 			if ( $parent === $candidate ) {
 				return false;
@@ -118,7 +125,8 @@ class SafePath {
 
 		$real = realpath( $candidate );
 		if ( false === $real ) {
-			return false;
+			// A dangling link: where it leads cannot be proven safe.
+			return is_link( $candidate );
 		}
 		return ! Paths::isInside( Paths::normalize( $real ), $real_base );
 	}

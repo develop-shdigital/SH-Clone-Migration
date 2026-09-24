@@ -189,9 +189,17 @@ class Writer {
 		// Discard anything written after the last committed block: a request
 		// that died mid-block must not leave a torn tail behind.
 		$committed = (int) $state['size'];
-		$actual    = (int) filesize( $path );
+		clearstatcache( true, $path );
+		$actual = (int) filesize( $path );
 		if ( $actual > $committed ) {
 			ftruncate( $handle, $committed );
+		} elseif ( $actual < $committed ) {
+			// Shorter than its committed state: seeking past the end would
+			// leave a hole of zero bytes inside an entry.
+			fclose( $handle );
+			throw new \RuntimeException(
+				sprintf( 'Archive %1$s is shorter (%2$d bytes) than its saved state (%3$d bytes); it was cut short by an interrupted request. Start the export again.', basename( $path ), $actual, $committed )
+			);
 		}
 		fseek( $handle, $committed );
 
@@ -458,7 +466,33 @@ class Writer {
 			'hash'   => $meta['h'],
 			'type'   => $meta['t'],
 			'group'  => isset( $meta['g'] ) ? $meta['g'] : '',
+			'target' => isset( $meta['lt'] ) ? (string) $meta['lt'] : '',
+			'mode'   => octdec( $meta['x'] ),
 		);
+	}
+
+	/**
+	 * Throw away the open entry: truncate the archive back to where its
+	 * header started, as if it had never been begun.
+	 *
+	 * Used when a file changed or became unreadable part way through, so the
+	 * archive never holds a torn copy that would still pass verification.
+	 *
+	 * @return void
+	 * @throws \RuntimeException When the archive cannot be truncated.
+	 */
+	public function abortEntry() {
+		if ( null === $this->entry ) {
+			return;
+		}
+		$offset = (int) $this->entry['header_offset'];
+		fflush( $this->handle );
+		if ( ! ftruncate( $this->handle, $offset ) ) {
+			throw new \RuntimeException( 'The archive could not be truncated to discard an incomplete entry.' );
+		}
+		fseek( $this->handle, $offset );
+		$this->entry  = null;
+		$this->buffer = '';
 	}
 
 	/**
@@ -633,8 +667,10 @@ class Writer {
 	 * @throws \RuntimeException When the path escapes the archive namespace.
 	 */
 	protected function sanitizeLogicalPath( $path ) {
-		$path = str_replace( '\\', '/', (string) $path );
-		$path = preg_replace( '#/+#', '/', $path );
+		// A backslash is an ordinary character in a Linux file name (Windows
+		// ZIPs extracted there produce "images\logo.png"); it is kept, and the
+		// importer decides what it can represent on the destination.
+		$path = preg_replace( '#/+#', '/', (string) $path );
 		$path = ltrim( $path, '/' );
 		if ( '' === $path ) {
 			throw new \RuntimeException( 'Refusing to write an entry with an empty path.' );

@@ -40,7 +40,6 @@ class Settings {
 			'exclude_directories'   => array(),
 			'exclude_patterns'      => array(),
 			'exclude_large_files'   => 0, // Bytes; 0 = no limit.
-			'include_dropins'       => true,
 
 			// Engine tuning. These are performance knobs, not migration limits.
 			'block_size'            => 1048576,
@@ -98,7 +97,6 @@ class Settings {
 			'wp-content/debug.log',
 			'wp-content/w3tc-config',
 			'wp-content/advanced-cache.php',
-			'*/node_modules',
 			'*/.git',
 			'*/.svn',
 			'*/.DS_Store',

@@ -82,6 +82,7 @@ class Plugin {
 		if ( is_admin() ) {
 			( new Menu( $this ) )->register();
 			( new Notices( $this ) )->register();
+			add_action( 'admin_init', array( ServerRules::class, 'maybeInstall' ) );
 		}
 
 		( new Ajax( $this ) )->register();

@@ -163,15 +163,20 @@ class RollbackPointStage extends AbstractStage {
 				$table = $info['name'];
 
 				if ( empty( $state['table'] ) ) {
+					// Header first: a failed read must not leave an open entry.
+					$header = $exporter->tableHeader( $table, $info );
 					$writer->beginEntry(
-						Format::ENTRY_DB_TABLES . preg_replace( '/[^A-Za-z0-9_\-]/', '_', $table ) . '.sql',
+						Format::tableEntryPath( $table ),
 						array(
 							'group' => 'database',
 							'mtime' => time(),
 						)
 					);
-					$writer->append( $exporter->tableHeader( $table, $info ) );
-					$state['table'] = array( 'rows' => array() );
+					$writer->append( $header );
+					$state['table'] = array(
+						'rows'    => array(),
+						'retries' => 0,
+					);
 				}
 
 				if ( 'view' === $info['type'] ) {
@@ -187,6 +192,24 @@ class RollbackPointStage extends AbstractStage {
 					);
 					$state['table']['rows'] = $rows;
 					$state['table']['done'] = ! empty( $rows['done'] );
+
+					if ( ! empty( $rows['error'] ) ) {
+						// Nothing has been changed yet: a rollback point that
+						// cannot be completed stops the import right here.
+						$state['table']['retries'] = ( isset( $state['table']['retries'] ) ? (int) $state['table']['retries'] : 0 ) + 1;
+						$this->logger->warning( sprintf( 'Rollback point: reading %1$s failed (attempt %2$d): %3$s', $table, $state['table']['retries'], $rows['error'] ) );
+						if ( $state['table']['retries'] >= 5 ) {
+							throw new \RuntimeException(
+								sprintf(
+									/* translators: 1: table name, 2: database error */
+									__( 'The rollback point could not read table %1$s, so the import was stopped before anything was changed. Database error: %2$s', 'sh-clone-migration' ),
+									$table,
+									$rows['error']
+								)
+							);
+						}
+						break;
+					}
 				}
 
 				if ( ! empty( $state['table']['done'] ) ) {

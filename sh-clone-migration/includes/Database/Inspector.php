@@ -34,6 +34,20 @@ class Inspector {
 	protected $cache = null;
 
 	/**
+	 * Whether table names compare case-insensitively (null until asked).
+	 *
+	 * @var bool|null
+	 */
+	protected $case_insensitive = null;
+
+	/**
+	 * Prefixes of the WordPress installations found in the schema.
+	 *
+	 * @var string[]
+	 */
+	protected $installations = array();
+
+	/**
 	 * Constructor.
 	 *
 	 * @param \wpdb|null $db Database handle.
@@ -56,19 +70,148 @@ class Inspector {
 	}
 
 	/**
-	 * Database name.
+	 * The prefix as the table names actually spell it.
+	 *
+	 * With case-insensitive table names the server may report "wp_options"
+	 * for a prefix configured as "WP_". The dump uses the names the server
+	 * reports, so the archive must record the prefix in that spelling too, or
+	 * the importer would not recognise (or rewrite) its own tables.
+	 *
+	 * @return string
+	 */
+	public function storedPrefix() {
+		$prefix = $this->prefix();
+		if ( ! $this->caseInsensitiveNames() ) {
+			return $prefix;
+		}
+		foreach ( array_keys( $this->inventory() ) as $name ) {
+			if ( 0 === strcasecmp( $name, $prefix . 'options' ) ) {
+				return substr( $name, 0, strlen( $prefix ) );
+			}
+		}
+		return $prefix;
+	}
+
+	/**
+	 * Name of the schema the connection actually uses.
+	 *
+	 * Every dump query uses unqualified table names, so the table list must
+	 * come from the selected schema, which a db.php drop-in or a call to
+	 * $wpdb->select() can make differ from DB_NAME.
 	 *
 	 * @return string
 	 */
 	public function databaseName() {
-		return defined( 'DB_NAME' ) ? DB_NAME : (string) $this->db->get_var( 'SELECT DATABASE()' );
+		$selected = (string) $this->db->get_var( 'SELECT DATABASE()' );
+		if ( '' !== $selected ) {
+			return $selected;
+		}
+		if ( ! empty( $this->db->dbname ) ) {
+			return (string) $this->db->dbname;
+		}
+		return defined( 'DB_NAME' ) ? DB_NAME : '';
+	}
+
+	/**
+	 * Whether the server compares table names without regard to case.
+	 *
+	 * With lower_case_table_names 1 (Windows, Azure) or 2 (macOS) the server
+	 * may report "wp_options" for a prefix configured as "WP_".
+	 *
+	 * @return bool
+	 */
+	public function caseInsensitiveNames() {
+		if ( null === $this->case_insensitive ) {
+			$value                  = $this->db->get_var( 'SELECT @@lower_case_table_names' );
+			$this->case_insensitive = null !== $value && '0' !== (string) $value;
+		}
+		return $this->case_insensitive;
+	}
+
+	/**
+	 * Whether a table name starts with a prefix, honouring the server's
+	 * case rules.
+	 *
+	 * @param string $name   Table name.
+	 * @param string $prefix Prefix.
+	 * @return bool
+	 */
+	public function hasPrefix( $name, $prefix ) {
+		$length = strlen( (string) $prefix );
+		if ( 0 === $length ) {
+			return true;
+		}
+		return $this->caseInsensitiveNames()
+			? 0 === strncasecmp( (string) $name, (string) $prefix, $length )
+			: 0 === strncmp( (string) $name, (string) $prefix, $length );
+	}
+
+	/**
+	 * Run a read query and fail loudly when the server reports an error.
+	 *
+	 * wpdb::get_results() returns an empty array, never null, when a query
+	 * fails. Taking that at face value turns a lock timeout or a dropped
+	 * connection into "the table is empty", so every read the dump depends
+	 * on goes through here.
+	 *
+	 * @param string $sql    Query.
+	 * @param string $output ARRAY_A or ARRAY_N.
+	 * @param string $what   What was being read, for the message.
+	 * @return array
+	 * @throws \RuntimeException When the query fails.
+	 */
+	public function read( $sql, $output, $what ) {
+		if ( ! is_string( $sql ) || '' === $sql ) {
+			// wpdb::get_results() without a query returns the previous result.
+			throw new DatabaseReadException( sprintf( 'Reading %s failed: the query could not be prepared.', $what ) );
+		}
+
+		// Straight on the connection when possible. wpdb::query() refuses
+		// (or strips characters from) a query whose text does not fit the
+		// narrowest character set among a table's columns, and a keyset
+		// cursor carries a key value, "straße" say, into the query text.
+		$dbh = isset( $this->db->dbh ) ? $this->db->dbh : null;
+		if ( $dbh instanceof \mysqli ) {
+			try {
+				$result = @mysqli_query( $dbh, $sql );
+			} catch ( \Exception $e ) {
+				throw new DatabaseReadException( sprintf( 'Reading %1$s failed: %2$s', $what, $e->getMessage() ) );
+			}
+			if ( false === $result ) {
+				throw new DatabaseReadException( sprintf( 'Reading %1$s failed: %2$s', $what, mysqli_error( $dbh ) ) );
+			}
+			$rows = array();
+			if ( $result instanceof \mysqli_result ) {
+				$mode = ARRAY_N === $output ? MYSQLI_NUM : MYSQLI_ASSOC;
+				while ( null !== ( $row = mysqli_fetch_array( $result, $mode ) ) && false !== $row ) {
+					$rows[] = $row;
+				}
+				mysqli_free_result( $result );
+			}
+			return $rows;
+		}
+
+		$this->db->last_error = '';
+		$rows                 = $this->db->get_results( $sql, $output ); // phpcs:ignore WordPress.DB.PreparedSQL
+		if ( '' !== (string) $this->db->last_error || ! is_array( $rows ) ) {
+			throw new DatabaseReadException(
+				sprintf( 'Reading %1$s failed: %2$s', $what, '' !== (string) $this->db->last_error ? $this->db->last_error : 'no result' )
+			);
+		}
+		return $rows;
 	}
 
 	/**
 	 * Every table and view in the current schema, with classification.
 	 *
+	 * A table is "owned" unless it belongs to another WordPress installation
+	 * sharing this database. Ownership goes to the longest installation
+	 * prefix a table name starts with, so a site on "wp_shop_" never claims
+	 * the tables of a site on "wp_" and vice versa.
+	 *
 	 * @param bool $refresh Bypass the cache.
 	 * @return array[] Each entry: name, type, engine, rows, data_length, index_length, collation, owned.
+	 * @throws \RuntimeException When the table list cannot be read at all.
 	 */
 	public function inventory( $refresh = false ) {
 		if ( null !== $this->cache && ! $refresh ) {
@@ -77,52 +220,47 @@ class Inspector {
 
 		$prefix  = $this->prefix();
 		$schema  = $this->databaseName();
-		$results = $this->db->get_results(
-			$this->db->prepare(
-				'SELECT TABLE_NAME AS name, TABLE_TYPE AS table_type, ENGINE AS engine, TABLE_ROWS AS row_estimate,
-				        DATA_LENGTH AS data_length, INDEX_LENGTH AS index_length, TABLE_COLLATION AS collation,
-				        AUTO_INCREMENT AS auto_increment
-				 FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s',
-				$schema
-			),
-			ARRAY_A
-		);
+		$results = array();
+
+		try {
+			$results = $this->read(
+				$this->db->prepare(
+					'SELECT TABLE_NAME AS name, TABLE_TYPE AS table_type, ENGINE AS engine, TABLE_ROWS AS row_estimate,
+					        DATA_LENGTH AS data_length, INDEX_LENGTH AS index_length, TABLE_COLLATION AS collation,
+					        AUTO_INCREMENT AS auto_increment
+					 FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s',
+					$schema
+				),
+				ARRAY_A,
+				'the table list'
+			);
+		} catch ( DatabaseReadException $e ) {
+			$results = array();
+		}
 
 		if ( empty( $results ) ) {
 			// Hosts occasionally restrict information_schema; fall back to SHOW.
-			$results = array();
-			$rows    = $this->db->get_results( 'SHOW FULL TABLES', ARRAY_N );
-			foreach ( (array) $rows as $row ) {
+			$rows = $this->read( 'SHOW FULL TABLES', ARRAY_N, 'the table list' );
+			foreach ( $rows as $row ) {
 				$results[] = array(
-					'name'         => $row[0],
-					'table_type'   => isset( $row[1] ) && 'VIEW' === strtoupper( $row[1] ) ? 'VIEW' : 'BASE TABLE',
-					'engine'       => '',
-					'row_estimate' => 0,
-					'data_length'  => 0,
-					'index_length' => 0,
-					'collation'    => '',
+					'name'           => $row[0],
+					'table_type'     => isset( $row[1] ) && 'VIEW' === strtoupper( $row[1] ) ? 'VIEW' : 'BASE TABLE',
+					'engine'         => '',
+					'row_estimate'   => 0,
+					'data_length'    => 0,
+					'index_length'   => 0,
+					'collation'      => '',
 					'auto_increment' => null,
 				);
 			}
 		}
 
-		$foreign_prefixes = $this->foreignPrefixes( $results, $prefix );
+		$this->installations = $this->installationPrefixes( $results, $prefix );
 
 		$inventory = array();
-		foreach ( (array) $results as $row ) {
-			$name  = $row['name'];
-			$owned = true;
-			if ( 0 !== strncmp( $name, $prefix, strlen( $prefix ) ) ) {
-				// Not one of ours by prefix: keep it only when it does not
-				// belong to another WordPress installation sharing this schema.
-				$owned = true;
-				foreach ( $foreign_prefixes as $foreign ) {
-					if ( 0 === strncmp( $name, $foreign, strlen( $foreign ) ) ) {
-						$owned = false;
-						break;
-					}
-				}
-			}
+		foreach ( $results as $row ) {
+			$name  = (string) $row['name'];
+			$owner = $this->ownerPrefix( $name );
 
 			$inventory[ $name ] = array(
 				'name'           => $name,
@@ -133,8 +271,9 @@ class Inspector {
 				'index_length'   => (int) $row['index_length'],
 				'collation'      => (string) $row['collation'],
 				'auto_increment' => null === $row['auto_increment'] ? null : (int) $row['auto_increment'],
-				'prefixed'       => 0 === strncmp( $name, $prefix, strlen( $prefix ) ),
-				'owned'          => $owned,
+				'prefixed'       => $this->hasPrefix( $name, $prefix ),
+				'owned'          => null === $owner || $this->isOwnPrefix( $owner, $prefix ),
+				'installation'   => null === $owner ? '' : $owner,
 			);
 		}
 
@@ -144,33 +283,136 @@ class Inspector {
 	}
 
 	/**
-	 * Detect prefixes belonging to other WordPress installations in the same
-	 * database, so their tables are never cloned by accident.
+	 * Tables every WordPress site has, a multisite network's sub-sites
+	 * included. A prefix only counts as a separate installation when all of
+	 * them exist: plugins create look-alikes such as "wp_sfoptions" and
+	 * "wp_sfposts" (the Simple:Press forum), and treating "wp_sf" as another
+	 * site would silently drop that plugin's data.
 	 *
-	 * @param array  $rows   information_schema rows.
-	 * @param string $prefix Our own prefix.
 	 * @return string[]
 	 */
-	protected function foreignPrefixes( array $rows, $prefix ) {
-		$found = array();
+	public static function siteTables() {
+		return array( 'options', 'posts', 'postmeta', 'comments', 'terms', 'term_taxonomy', 'term_relationships' );
+	}
+
+	/**
+	 * Prefixes of every WordPress installation in the schema, ours included.
+	 *
+	 * A prefix counts as an installation when every table of siteTables()
+	 * exists for it, whether or not it has a users table of its own (sites
+	 * can share one through CUSTOM_USER_TABLE). Only the numbered sites of
+	 * this multisite network ({prefix}2_, ...) are ours; see isOwnPrefix().
+	 *
+	 * @param array  $rows   Table rows (name key).
+	 * @param string $prefix Our own prefix.
+	 * @return string[] Longest first.
+	 */
+	protected function installationPrefixes( array $rows, $prefix ) {
+		$names = array();
 		foreach ( $rows as $row ) {
-			$name = $row['name'];
-			if ( ! preg_match( '/^(.*)options$/', $name, $matches ) ) {
+			$key           = $this->caseInsensitiveNames() ? strtolower( (string) $row['name'] ) : (string) $row['name'];
+			$names[ $key ] = (string) $row['name'];
+		}
+		$has = function ( $name ) use ( $names ) {
+			return isset( $names[ $this->caseInsensitiveNames() ? strtolower( $name ) : $name ] );
+		};
+
+		$found = array( (string) $prefix );
+		foreach ( $names as $key => $name ) {
+			if ( ! preg_match( '/^(.+)options$/i', $name, $matches ) ) {
 				continue;
 			}
 			$candidate = $matches[1];
-			if ( '' === $candidate ) {
+			$complete  = true;
+			foreach ( self::siteTables() as $table ) {
+				if ( ! $has( $candidate . $table ) ) {
+					$complete = false;
+					break;
+				}
+			}
+			if ( ! $complete ) {
 				continue;
-			}
-			if ( 0 === strncmp( $candidate, $prefix, strlen( $prefix ) ) ) {
-				continue; // Ours (including multisite per-site prefixes).
-			}
-			if ( 0 === strncmp( $prefix, $candidate, strlen( $candidate ) ) ) {
-				continue; // We are a longer prefix of this one; keep it.
 			}
 			$found[] = $candidate;
 		}
-		return array_unique( $found );
+
+		$unique = array();
+		foreach ( $found as $candidate ) {
+			$unique[ $this->caseInsensitiveNames() ? strtolower( $candidate ) : $candidate ] = $candidate;
+		}
+		$found = array_values( $unique );
+		usort(
+			$found,
+			static function ( $a, $b ) {
+				return strlen( $b ) <=> strlen( $a );
+			}
+		);
+		return $found;
+	}
+
+	/**
+	 * The installation prefix a table belongs to: the longest one it starts
+	 * with, or null for a table no installation claims.
+	 *
+	 * @param string $name Table name.
+	 * @return string|null
+	 */
+	protected function ownerPrefix( $name ) {
+		foreach ( $this->installations as $candidate ) {
+			if ( $this->hasPrefix( $name, $candidate ) ) {
+				return $candidate;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Whether an installation prefix is this site's (on multisite, the
+	 * network's base prefix or one of its per-site prefixes).
+	 *
+	 * @param string $candidate Installation prefix.
+	 * @param string $prefix    Our prefix.
+	 * @return bool
+	 */
+	protected function isOwnPrefix( $candidate, $prefix ) {
+		$equal = $this->caseInsensitiveNames() ? 0 === strcasecmp( $candidate, $prefix ) : $candidate === $prefix;
+		if ( $equal ) {
+			return true;
+		}
+		if ( is_multisite() && $this->hasPrefix( $candidate, $prefix ) ) {
+			return (bool) preg_match( '/^\d+_$/', substr( $candidate, strlen( $prefix ) ) );
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a table name (existing or not) would belong to this site rather
+	 * than to another installation sharing the database.
+	 *
+	 * @param string $name Table name.
+	 * @return bool
+	 */
+	public function isOwnTableName( $name ) {
+		$this->inventory();
+		$owner = $this->ownerPrefix( $name );
+		return null === $owner || $this->isOwnPrefix( $owner, $this->prefix() );
+	}
+
+	/**
+	 * Prefixes of other WordPress installations sharing this database.
+	 *
+	 * @return string[]
+	 */
+	public function foreignInstallations() {
+		$this->inventory();
+		$prefix  = $this->prefix();
+		$foreign = array();
+		foreach ( $this->installations as $candidate ) {
+			if ( ! $this->isOwnPrefix( $candidate, $prefix ) ) {
+				$foreign[] = $candidate;
+			}
+		}
+		return $foreign;
 	}
 
 	/**
@@ -216,9 +458,9 @@ class Inspector {
 	 * @return array[] name => array(type, base_type, is_binary, is_numeric, nullable, key).
 	 */
 	public function columns( $table ) {
-		$rows    = $this->db->get_results( 'SHOW FULL COLUMNS FROM `' . str_replace( '`', '``', $table ) . '`', ARRAY_A );
+		$rows    = $this->read( 'SHOW FULL COLUMNS FROM `' . str_replace( '`', '``', $table ) . '`', ARRAY_A, 'the columns of table ' . $table );
 		$columns = array();
-		foreach ( (array) $rows as $row ) {
+		foreach ( $rows as $row ) {
 			$type = strtolower( (string) $row['Type'] );
 			$base = preg_replace( '/\(.*$/', '', $type );
 			$base = trim( preg_replace( '/\s+(unsigned|zerofill)/', '', $base ) );
@@ -227,7 +469,8 @@ class Inspector {
 				'name'       => $row['Field'],
 				'type'       => $type,
 				'base_type'  => $base,
-				'is_binary'  => in_array( $base, array( 'binary', 'varbinary', 'tinyblob', 'blob', 'mediumblob', 'longblob', 'bit' ), true ),
+				'is_binary'  => in_array( $base, array( 'binary', 'varbinary', 'tinyblob', 'blob', 'mediumblob', 'longblob' ), true ),
+				'is_bit'     => 'bit' === $base,
 				'is_numeric' => in_array( $base, array( 'tinyint', 'smallint', 'mediumint', 'int', 'integer', 'bigint', 'float', 'double', 'decimal', 'numeric', 'real', 'year' ), true ),
 				'is_text'    => in_array( $base, array( 'char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext', 'json', 'enum', 'set' ), true ),
 				'nullable'   => 'YES' === $row['Null'],
@@ -241,27 +484,55 @@ class Inspector {
 	/**
 	 * Primary (or best unique) key columns for a table.
 	 *
+	 * Only keys that identify every row qualify: the primary key, or a unique
+	 * index whose columns are all NOT NULL. A unique index on a nullable
+	 * column admits any number of NULL rows, and paging on it would loop over
+	 * them forever.
+	 *
 	 * @param string $table Table name.
 	 * @return string[] Column names, empty when the table has no usable key.
 	 */
 	public function keyColumns( $table ) {
-		$rows    = $this->db->get_results( 'SHOW INDEX FROM `' . str_replace( '`', '``', $table ) . '`', ARRAY_A );
-		$indexes = array();
-		foreach ( (array) $rows as $row ) {
+		$rows     = $this->read( 'SHOW INDEX FROM `' . str_replace( '`', '``', $table ) . '`', ARRAY_A, 'the indexes of table ' . $table );
+		$indexes  = array();
+		$nullable = array();
+		foreach ( $rows as $row ) {
 			if ( '0' !== (string) $row['Non_unique'] ) {
 				continue;
 			}
-			$indexes[ $row['Key_name'] ][ (int) $row['Seq_in_index'] ] = $row['Column_name'];
+			$key = (string) $row['Key_name'];
+			// MariaDB's "long unique" HASH indexes cannot order rows, so
+			// ORDER BY on them falls back to a sort that compares only the
+			// first max_sort_length bytes.
+			if ( isset( $row['Index_type'] ) && in_array( strtoupper( (string) $row['Index_type'] ), array( 'HASH', 'FULLTEXT', 'SPATIAL' ), true ) ) {
+				$nullable[ $key ] = true;
+			}
+			if ( isset( $row['Sub_part'] ) && '' !== (string) $row['Sub_part'] ) {
+				// A prefix index does not order or identify whole values.
+				$nullable[ $key ] = true;
+			}
+			if ( isset( $row['Null'] ) && 'YES' === strtoupper( (string) $row['Null'] ) ) {
+				$nullable[ $key ] = true;
+			}
+			$indexes[ $key ][ (int) $row['Seq_in_index'] ] = (string) $row['Column_name'];
 		}
-		if ( isset( $indexes['PRIMARY'] ) ) {
+
+		if ( isset( $indexes['PRIMARY'] ) && empty( $nullable['PRIMARY'] ) ) {
 			ksort( $indexes['PRIMARY'] );
 			return array_values( $indexes['PRIMARY'] );
 		}
-		foreach ( $indexes as $columns ) {
+
+		$best = array();
+		foreach ( $indexes as $name => $columns ) {
+			if ( ! empty( $nullable[ $name ] ) ) {
+				continue;
+			}
 			ksort( $columns );
-			return array_values( $columns );
+			if ( empty( $best ) || count( $columns ) < count( $best ) ) {
+				$best = array_values( $columns );
+			}
 		}
-		return array();
+		return $best;
 	}
 
 	/**
@@ -293,11 +564,8 @@ class Inspector {
 	 */
 	public function createStatement( $table, $type = 'table' ) {
 		$quoted = '`' . str_replace( '`', '``', $table ) . '`';
-		$row    = $this->db->get_row( 'SHOW CREATE ' . ( 'view' === $type ? 'VIEW' : 'TABLE' ) . ' ' . $quoted, ARRAY_N );
-		if ( empty( $row ) ) {
-			return '';
-		}
-		return isset( $row[1] ) ? (string) $row[1] : '';
+		$rows   = $this->read( 'SHOW CREATE ' . ( 'view' === $type ? 'VIEW' : 'TABLE' ) . ' ' . $quoted, ARRAY_N, 'the definition of table ' . $table );
+		return isset( $rows[0][1] ) ? (string) $rows[0][1] : '';
 	}
 
 	/**
@@ -313,20 +581,34 @@ class Inspector {
 	/**
 	 * Trigger definitions for the current schema.
 	 *
+	 * @param string[]|null $tables Keep only triggers on these tables.
 	 * @return array[]
+	 * @throws \RuntimeException When the trigger list cannot be read.
 	 */
-	public function triggers() {
+	public function triggers( $tables = null ) {
 		$schema = $this->databaseName();
-		$rows   = $this->db->get_results(
+		$rows   = $this->read(
 			$this->db->prepare(
 				'SELECT TRIGGER_NAME AS name, EVENT_MANIPULATION AS event, EVENT_OBJECT_TABLE AS target,
 				        ACTION_TIMING AS timing, ACTION_STATEMENT AS statement
 				 FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = %s',
 				$schema
 			),
-			ARRAY_A
+			ARRAY_A,
+			'the trigger definitions'
 		);
-		return is_array( $rows ) ? $rows : array();
+		if ( null === $tables ) {
+			return $rows;
+		}
+		$keep = array_flip( (array) $tables );
+		return array_values(
+			array_filter(
+				$rows,
+				static function ( $row ) use ( $keep ) {
+					return isset( $keep[ $row['target'] ] );
+				}
+			)
+		);
 	}
 
 	/**

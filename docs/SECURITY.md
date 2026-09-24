@@ -67,7 +67,26 @@ one is equivalent to leaking the database.
   server the path cannot be guessed.
 * Downloads are streamed through an authenticated, nonce-checked endpoint that
   resolves the requested name against the archive directory and rejects
-  anything that is not a plain `.wpress` filename in it.
+  anything that is not a plain `.wpress` filename in it. Archive names are
+  reduced to `[A-Za-z0-9._-]` when they are created, so every archive the
+  plugin writes can be resolved (and nothing else can). An archive without a
+  footer (still being written) is refused with 409.
+* To keep the exact `Content-Length` of a download on Apache with PHP-FPM and
+  behind servers that compress everything, the plugin maintains one marked
+  block in the site's `.htaccess`. It only sets the environment variables
+  `no-gzip`, `dont-vary` and `ap_trust_cgilike_cl`, only for requests to
+  `admin-post.php` whose query string is `action=shcm_download` or
+  `action=shcm_download_log`, is written only when the file already contains
+  rewrite rules (so it cannot introduce a directive the host forbids), and is
+  removed on deactivation and uninstall. `ap_trust_cgilike_cl` tells Apache to
+  trust the length the download handler sends; that handler always sends the
+  exact length of the bytes it streams. The filter `shcm_manage_htaccess` can
+  switch this off.
+* The delivery self-test, `admin-post.php?action=shcm_download_probe`, is the
+  one download action that needs no session: the site fetches it over a
+  loopback request to see what the web server does to a download. It always
+  serves the same 128 KB of fixed text from the storage directory and accepts
+  no parameters.
 
 ## Untrusted archives
 
@@ -86,15 +105,40 @@ An archive may have been produced anywhere, by anyone with import rights.
 * **Paths** are rejected if they are absolute, contain `..`, start with a
   Windows drive letter, use a stream wrapper (`phar://`, `http://`), contain a
   null byte or a control character, or resolve outside the destination through
-  a symlink. Traversal is refused outright rather than normalised away.
+  a symlink: the deepest part of the target path that exists is resolved
+  through every link in it, and a dangling link, whose destination cannot be
+  proven, counts as outside. Traversal is refused outright rather than
+  normalised away. On
+  Windows a backslash is converted to a separator *before* these checks; on
+  other systems it is an ordinary character in a file name, so `..\..\x` is
+  a single, harmless file name there.
 * **Protected paths** are never overwritten whatever the archive says:
   `wp-config.php`, `.htaccess`, `.user.ini`, `php.ini`, `web.config`, the
-  storage directory and this plugin's own directory.
-* **Symlinks** are recreated only when their target stays inside the
-  installation; anything else is reported and skipped.
+  storage directory and this plugin's own directory. They are matched after
+  the entry path has been normalised (`./wp-config.php`, `a/../wp-config.php`)
+  and case-insensitively (`WP-CONFIG.PHP` is the same file on Windows and
+  macOS).
+* **Symlinks** are recreated only when their target, with `.` and `..`
+  resolved, stays inside the installation and does not pass through another
+  link; anything else is reported and skipped. A link that would replace
+  something already on the destination is reported too, and a file entry
+  never writes through a link that is already at its path: the link is
+  removed first.
 * **File modes** are clamped: setuid, setgid and sticky bits are never
   restored, the world-writable bit is stripped, and an unreadable mode is
   corrected.
+
+## What an export reads
+
+The export runs with the web server's permissions and writes an archive only
+administrators can download, but it still never wanders outside the site on
+its own. A symlinked directory is followed only when it does not contain the
+site: a link to `/`, a home directory or a parent of `ABSPATH` is reported and
+skipped, and so is a link into a system directory (`/proc`, `/sys`, `/dev`,
+`/run`). A link back to a directory the same branch is already inside is kept
+as a link, so loops end; at most 10,000 directory links are followed in one
+export. A link whose target is already inside the site is stored as a link
+rather than copied twice.
 
 ## SQL execution
 

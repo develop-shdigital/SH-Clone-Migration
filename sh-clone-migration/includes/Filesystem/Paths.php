@@ -43,6 +43,39 @@ class Paths {
 	}
 
 	/**
+	 * Resolve "." and ".." segments lexically, without touching the disk.
+	 *
+	 * normalize() leaves "a/b/../../../etc" alone, and a string prefix test
+	 * on that would call it "inside a". Anything that decides containment
+	 * must collapse the path first.
+	 *
+	 * @param string $path Path.
+	 * @return string Collapsed path; a relative path that climbs above its
+	 *                start keeps its leading "..".
+	 */
+	public static function collapse( $path ) {
+		$path     = self::normalize( $path );
+		$absolute = '' !== $path && '/' === $path[0];
+		$parts    = array();
+		foreach ( explode( '/', $path ) as $part ) {
+			if ( '' === $part || '.' === $part ) {
+				continue;
+			}
+			if ( '..' === $part ) {
+				if ( ! empty( $parts ) && '..' !== end( $parts ) ) {
+					array_pop( $parts );
+				} elseif ( ! $absolute ) {
+					$parts[] = '..';
+				}
+				continue;
+			}
+			$parts[] = $part;
+		}
+		$collapsed = implode( '/', $parts );
+		return $absolute ? '/' . $collapsed : ( '' === $collapsed ? '.' : $collapsed );
+	}
+
+	/**
 	 * Normalise and add a trailing slash.
 	 *
 	 * @param string $path Path.
@@ -121,6 +154,10 @@ class Paths {
 		if ( $child === $parent ) {
 			return true;
 		}
+		if ( '/' === $parent ) {
+			// Everything absolute is inside the filesystem root.
+			return '' !== $child && '/' === $child[0];
+		}
 		return 0 === strncmp( $child . '/', $parent . '/', strlen( $parent ) + 1 );
 	}
 
@@ -146,8 +183,17 @@ class Paths {
 	/**
 	 * Build the map of logical roots for this installation.
 	 *
-	 * Roots that live inside another root are skipped: their files are already
-	 * covered by the parent walk.
+	 * wp-content is always a root of its own, even when the core files are
+	 * included, so that an import can restore content while skipping core
+	 * and can place it in the destination's content directory wherever that
+	 * is. The scanner skips a root's directory when it meets it inside
+	 * another root's walk.
+	 *
+	 * A plugins, mu-plugins or uploads directory becomes its own root unless
+	 * it physically lives inside another root. A symlinked uploads directory
+	 * (wp-content/uploads -> ../../shared/uploads in a deploy layout) looks
+	 * like it sits inside wp-content but does not, so it is compared by real
+	 * path; otherwise its contents would never be archived.
 	 *
 	 * @param bool $include_core Include the WordPress core/root files.
 	 * @return array<string,string> Logical root name => absolute path.
@@ -158,11 +204,7 @@ class Paths {
 		if ( $include_core ) {
 			$roots[ self::ROOT_CORE ] = self::abspath();
 		}
-
-		$content = self::contentDir();
-		if ( ! isset( $roots[ self::ROOT_CORE ] ) || ! self::isInside( $content, $roots[ self::ROOT_CORE ] ) ) {
-			$roots[ self::ROOT_CONTENT ] = $content;
-		}
+		$roots[ self::ROOT_CONTENT ] = self::contentDir();
 
 		$extra = array(
 			self::ROOT_PLUGINS    => self::pluginDir(),
@@ -173,9 +215,13 @@ class Paths {
 			if ( ! is_dir( $path ) ) {
 				continue;
 			}
+			$real    = self::real( $path );
 			$covered = false;
-			foreach ( $roots as $existing ) {
-				if ( self::isInside( $path, $existing ) ) {
+			foreach ( $roots as $existing_name => $existing ) {
+				if ( self::ROOT_CORE === $existing_name ) {
+					continue; // Everything is lexically inside ABSPATH; core never covers content.
+				}
+				if ( self::isInside( $path, $existing ) && self::isInside( $real, self::real( $existing ) ) ) {
 					$covered = true;
 					break;
 				}
@@ -186,6 +232,18 @@ class Paths {
 		}
 
 		return $roots;
+	}
+
+	/**
+	 * Real path of a directory, or its normalised path when it cannot be
+	 * resolved.
+	 *
+	 * @param string $path Path.
+	 * @return string
+	 */
+	public static function real( $path ) {
+		$real = @realpath( $path );
+		return false === $real ? self::normalize( $path ) : self::normalize( $real );
 	}
 
 	/**

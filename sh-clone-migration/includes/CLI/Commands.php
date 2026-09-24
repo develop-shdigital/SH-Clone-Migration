@@ -123,6 +123,53 @@ class Commands {
 			return;
 		}
 
+		$stored = $this->plugin->jobs()->load( $job['id'] );
+		$db     = (array) $stored->shared( 'database_totals', array() );
+		$sha256 = (string) $stored->shared( 'archive_sha256', '' );
+
+		\WP_CLI::line( sprintf( 'Size:     %1$s bytes (%2$s)', number_format( (int) filesize( $path ) ), Bytes::format( (int) filesize( $path ) ) ) );
+		if ( '' !== $sha256 ) {
+			\WP_CLI::line( sprintf( 'SHA-256:  %s', $sha256 ) );
+		}
+		if ( empty( $db['included'] ) || empty( $db['tables'] ) ) {
+			\WP_CLI::warning( 'Database: NOT included in this archive.' );
+		} else {
+			\WP_CLI::line( sprintf( 'Database: %1$d tables, %2$s rows, %3$s of SQL (prefix %4$s)', (int) $db['tables'], number_format( (int) $db['rows'] ), Bytes::format( (int) $db['sql_bytes'] ), $db['prefix'] ) );
+		}
+		$groups = (array) $stored->shared( 'entry_groups', array() );
+		$parts  = array();
+		foreach ( $groups as $group => $counts ) {
+			if ( 'meta' !== $group && 'database' !== $group ) {
+				$parts[] = $group . ' ' . number_format( (int) $counts['entries'] );
+			}
+		}
+		if ( ! empty( $parts ) ) {
+			\WP_CLI::line( 'Files:    ' . implode( ', ', $parts ) );
+		}
+
+		// Files the scan passed over (unreadable, over the size limit) and
+		// files skipped while copying are not in the archive: say so.
+		$scanned      = (array) $stored->shared( 'file_totals', array() );
+		$copied       = (array) $stored->shared( 'files_exported', array() );
+		$skipped_scan = isset( $scanned['skipped'] ) ? (int) $scanned['skipped'] : 0;
+		$skipped_copy = isset( $copied['skipped'] ) ? (int) $copied['skipped'] : 0;
+		if ( $skipped_scan + $skipped_copy > 0 ) {
+			\WP_CLI::warning( sprintf( '%1$s files are not in the archive (%2$s skipped by the scan, %3$s while copying). The migration log names each one.', number_format( $skipped_scan + $skipped_copy ), number_format( $skipped_scan ), number_format( $skipped_copy ) ) );
+		}
+		$warnings = (int) $stored->get( 'warnings_total', 0 );
+		if ( $warnings > 0 ) {
+			foreach ( array_slice( (array) $stored->get( 'warnings' ), -10 ) as $warning ) {
+				\WP_CLI::warning( $warning['message'] );
+			}
+			\WP_CLI::warning(
+				sprintf(
+					$warnings > 10 ? '%1$d warnings in total, the last 10 shown above. Full log: %2$s' : '%1$d warning(s), shown above. Full log: %2$s',
+					$warnings,
+					$this->plugin->logger()->path( $stored->id() )
+				)
+			);
+		}
+
 		\WP_CLI::success(
 			sprintf( 'Archive written to %1$s (%2$s).', $path, Bytes::format( (int) filesize( $path ) ) )
 		);
@@ -284,9 +331,19 @@ class Commands {
 			\WP_CLI::error( 'Migration archive validation failed. The archive appears to be incomplete or corrupted.' );
 		}
 
+		// The plain SHA-256 of the file, compared with the checksum recorded
+		// when the archive was written or uploaded, when there is one.
+		$sha256   = (string) hash_file( 'sha256', $path );
+		$recorded = $catalog->sha256( $path );
+		\WP_CLI::line( sprintf( 'Size:    %s bytes', number_format( (int) filesize( $path ) ) ) );
+		\WP_CLI::line( sprintf( 'SHA-256: %1$s%2$s', $sha256, '' === $recorded ? '' : ( hash_equals( $recorded, $sha256 ) ? ' (matches the recorded checksum)' : ' (DIFFERENT from the recorded ' . $recorded . ')' ) ) );
+		if ( '' !== $recorded && ! hash_equals( $recorded, $sha256 ) ) {
+			\WP_CLI::error( 'The archive does not match the SHA-256 recorded for it.' );
+		}
+
 		\WP_CLI::success(
 			sprintf(
-				'Archive verified: %1$d entries, %2$s of content.',
+				'Archive verified: %1$d entries, %2$s of uncompressed content.',
 				$result['checked'],
 				Bytes::format( $result['bytes'] )
 			)
@@ -334,8 +391,10 @@ class Commands {
 				'source'    => $archive['source'],
 				'files'     => $archive['files'],
 				'tables'    => $archive['tables'],
+				'rows'      => isset( $archive['database_contents']['rows'] ) ? $archive['database_contents']['rows'] : '',
 				'encrypted' => $archive['encrypted'] ? 'yes' : 'no',
 				'complete'  => $archive['complete'] ? 'yes' : 'no',
+				'sha256'    => isset( $archive['sha256'] ) ? $archive['sha256'] : '',
 			);
 		}
 
@@ -347,7 +406,7 @@ class Commands {
 		\WP_CLI\Utils\format_items(
 			isset( $assoc_args['format'] ) ? $assoc_args['format'] : 'table',
 			$rows,
-			array( 'name', 'size', 'created', 'source', 'files', 'tables', 'encrypted', 'complete' )
+			array( 'name', 'size', 'created', 'source', 'files', 'tables', 'rows', 'encrypted', 'complete', 'sha256' )
 		);
 	}
 

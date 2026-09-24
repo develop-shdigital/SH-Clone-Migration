@@ -230,22 +230,32 @@
 		var report = job.report || {};
 		var facts = [];
 
-		if ( report.tables ) {
+		if ( job.type === 'export' && report.database_included !== null && report.database_included !== undefined ) {
+			// Always shown for an export, zero included: a missing database
+			// must be visible, not silently absent from the list.
+			facts.push( [ 'Tables', report.database_included === false ? 'not included' : formatNumber( report.tables ), ! report.database_included || ! report.tables ] );
+		} else if ( report.tables ) {
 			facts.push( [ 'Tables', formatNumber( report.tables ) ] );
+		}
+		if ( report.database && report.database.rows ) {
+			facts.push( [ 'Rows', formatNumber( report.database.rows ) ] );
 		}
 		if ( report.file_totals && report.file_totals.files ) {
 			facts.push( [ 'Files', formatNumber( report.file_totals.files ) ] );
 			facts.push( [ 'Source size', formatBytes( report.file_totals.bytes ) ] );
 		}
+		if ( report.file_totals && report.file_totals.skipped ) {
+			facts.push( [ 'Skipped', formatNumber( report.file_totals.skipped ), true ] );
+		}
 		if ( report.archive_size ) {
-			facts.push( [ 'Archive', formatBytes( report.archive_size ) ] );
+			facts.push( [ 'Archive', formatBytes( report.archive_size ) + ' (' + formatNumber( report.archive_size ) + ' bytes)' ] );
 		}
 		if ( report.urls && report.urls.stats ) {
 			facts.push( [ 'Values updated', formatNumber( report.urls.stats.values_changed ) ] );
 		}
 
 		this.facts.innerHTML = facts.map( function ( fact ) {
-			return '<span>' + escapeHtml( fact[ 0 ] ) + ': <strong>' + escapeHtml( fact[ 1 ] ) + '</strong></span>';
+			return '<span' + ( fact[ 2 ] ? ' class="shcm-text-danger"' : '' ) + '>' + escapeHtml( fact[ 0 ] ) + ': <strong>' + escapeHtml( fact[ 1 ] ) + '</strong></span>';
 		} ).join( '' );
 
 		this.renderGroups( report );
@@ -465,9 +475,90 @@
 		if ( ! job.warnings || ! job.warnings.length ) {
 			return '';
 		}
-		return '<h3>Warnings</h3><ul class="ul-disc">' + job.warnings.map( function ( warning ) {
+		var total = Number( job.warnings_total ) || job.warnings.length;
+		var note = total > job.warnings.length
+			? '<p class="description">Showing the last ' + formatNumber( job.warnings.length ) + ' of ' + formatNumber( total ) +
+				' warnings. The migration log lists every one of them.</p>'
+			: '';
+		return '<h3>Warnings (' + formatNumber( total ) + ')</h3>' + note + '<ul class="ul-disc">' + job.warnings.map( function ( warning ) {
 			return '<li>' + escapeHtml( warning.message ) + '</li>';
 		} ).join( '' ) + '</ul>';
+	}
+
+	/**
+	 * What an export put into its archive, in words: the database (or its
+	 * absence), the files per group, the exact size and the SHA-256 to check
+	 * a downloaded copy against.
+	 */
+	function renderArchiveSummary( job ) {
+		var report = job.report || {};
+		var rows = [];
+		var name = report.archive || '';
+
+		rows.push( [ 'Archive size', formatBytes( report.archive_size ) + ' &mdash; exactly <strong>' + formatNumber( report.archive_size ) + ' bytes</strong>' ] );
+
+		if ( report.sha256 ) {
+			rows.push( [ 'SHA-256', '<code class="shcm-hash">' + escapeHtml( report.sha256 ) + '</code>' ] );
+		}
+
+		var db = report.database || {};
+		if ( report.database_included === false || ! db.included ) {
+			rows.push( [ 'Database', '<span class="shcm-text-danger">NOT included in this archive</span>' ] );
+		} else if ( ! db.tables ) {
+			rows.push( [ 'Database', '<span class="shcm-text-danger">No tables were exported</span>' ] );
+		} else {
+			rows.push( [ 'Database', 'Included &mdash; <strong>' + formatNumber( db.tables ) + ' tables, ' + formatNumber( db.rows ) + ' rows</strong>, ' +
+				formatBytes( db.sql_bytes ) + ' of SQL (table prefix <code>' + escapeHtml( db.prefix || '' ) + '</code>)' ] );
+		}
+
+		var groups = report.entry_groups || {};
+		var order = [ 'plugins', 'themes', 'mu-plugins', 'uploads', 'languages', 'other', 'core' ];
+		var parts = [];
+		var files = 0;
+		Object.keys( groups ).sort( function ( a, b ) {
+			var ai = order.indexOf( a );
+			var bi = order.indexOf( b );
+			return ( ai < 0 ? 99 : ai ) - ( bi < 0 ? 99 : bi );
+		} ).forEach( function ( group ) {
+			if ( group === 'meta' || group === 'database' ) {
+				return;
+			}
+			files += Number( groups[ group ].entries ) || 0;
+			parts.push( escapeHtml( group ) + ' ' + formatNumber( groups[ group ].entries ) + ' (' + formatBytes( groups[ group ].bytes ) + ')' );
+		} );
+		// Skipped by the scan (unreadable, over the size limit) plus skipped
+		// while copying (vanished, unreadable or still changing).
+		var skipped = ( report.files_exported && report.files_exported.skipped ? Number( report.files_exported.skipped ) : 0 ) +
+			( report.file_totals && report.file_totals.skipped ? Number( report.file_totals.skipped ) : 0 );
+		rows.push( [ 'Files', '<strong>' + formatNumber( files ) + '</strong>' + ( parts.length ? ': ' + parts.join( ', ' ) : '' ) +
+			( skipped ? ' &mdash; <span class="shcm-text-danger">' + formatNumber( skipped ) + ' skipped (see the warnings and the log)</span>' : '' ) ] );
+
+		if ( report.verify_mode === 'full' ) {
+			rows.push( [ 'Verification', 'The archive was read back and every one of its ' + formatNumber( report.verified_entries ) + ' entries matched its checksum.' ] );
+		} else if ( report.verify_mode === 'quick' ) {
+			rows.push( [ 'Verification', 'Structure check only (quick mode in the settings); entry checksums were not read back.' ] );
+		}
+
+		var html = '<table class="widefat shcm-summary"><tbody>' + rows.map( function ( row ) {
+			return '<tr><th scope="row">' + row[ 0 ] + '</th><td>' + row[ 1 ] + '</td></tr>';
+		} ).join( '' ) + '</tbody></table>';
+
+		html += '<details class="shcm-verify-help"><summary>How to check the downloaded file</summary>' +
+			'<p>The downloaded file must be exactly <strong>' + formatNumber( report.archive_size ) + ' bytes</strong>' +
+			( report.sha256 ? ' and its SHA-256 must be the one shown above' : '' ) + '. To compute it:</p>' +
+			'<p>Windows (PowerShell): <code>Get-FileHash .\\' + escapeHtml( name ) + ' -Algorithm SHA256</code><br>' +
+			'macOS: <code>shasum -a 256 ' + escapeHtml( name ) + '</code><br>' +
+			'Linux: <code>sha256sum ' + escapeHtml( name ) + '</code></p>' +
+			'<p>The import checks every entry again before it changes anything, so a damaged copy is always refused.</p>' +
+			'</details>';
+
+		if ( report.size_visible === false ) {
+			html += '<div class="shcm-alert shcm-alert--warning">This server may hide the file size from browsers and download managers ' +
+				'(they then say the size is unknown and cannot resume). The download is still complete when its size and SHA-256 match. ' +
+				'See <em>System status</em> for the one-time server rule that fixes this.</div>';
+		}
+
+		return html;
 	}
 
 	/* --------------------------------------------------------------- export */
@@ -487,10 +578,12 @@
 				if ( job.status === 'completed' ) {
 					var report = job.report || {};
 					var url = data.downloadUrl + '&archive=' + encodeURIComponent( report.archive || '' );
+					var dbMissing = report.database_included === false || ! report.database || ! report.database.tables;
 					showResult(
-						'<div class="shcm-alert shcm-alert--success"><strong>Migration Ready.</strong> ' +
-						escapeHtml( report.archive || '' ) + ' &mdash; ' + formatBytes( report.archive_size ) +
+						'<div class="shcm-alert shcm-alert--' + ( dbMissing ? 'warning' : 'success' ) + '"><strong>Migration Ready.</strong> ' +
+						escapeHtml( report.archive || '' ) +
 						'</div>' +
+						renderArchiveSummary( job ) +
 						'<p><a class="button button-primary button-hero" href="' + url + '">Download .wpress</a> ' +
 						'<a class="button" href="' + data.logUrl + '&job_id=' + encodeURIComponent( job.id ) + '">Download log</a></p>' +
 						renderWarnings( job )
@@ -710,22 +803,25 @@
 				.then( function ( result ) {
 					var m = result.manifest;
 					var a = result.archive;
+					var contents = databaseLine( a ) + filesLine( a );
+					var common = row( 'Archive', formatBytes( a.size ) + ' (' + formatNumber( a.size ) + ' bytes)' ) +
+						( a.sha256 ? row( 'SHA-256', a.sha256 ) : '' ) +
+						( a.complete ? '' : row( 'Status', 'incomplete: this archive has no footer and cannot be imported', true ) );
 					if ( ! m ) {
-						box.innerHTML = '<p><strong>Archive detected.</strong> ' +
-							escapeHtml( a.name ) + ' &mdash; ' + formatBytes( a.size ) +
-							( a.encrypted ? '<br>' + escapeHtml( strings.passwordNeeded ) : '' ) + '</p>';
+						box.innerHTML = '<p><strong>Archive detected.</strong> ' + escapeHtml( a.name ) +
+							( a.encrypted ? '<br>' + escapeHtml( strings.passwordNeeded ) : '' ) + '</p>' +
+							'<dl>' + common + contents + '</dl>';
 						return;
 					}
 					box.innerHTML = '<dl>' +
 						row( 'Source', m.site && m.site.home ) +
 						row( 'WordPress', m.wordpress && m.wordpress.version ) +
 						row( 'PHP', m.php && m.php.version ) +
-						row( 'Database', m.database && m.database.server ) +
+						row( 'Database server', m.database && m.database.server ) +
 						row( 'Table prefix', m.wordpress && m.wordpress.table_prefix ) +
-						row( 'Tables', formatNumber( m.database && m.database.tables ) ) +
-						row( 'Files', formatNumber( m.files && m.files.count ) ) +
-						row( 'Content size', formatBytes( m.files && m.files.size ) ) +
-						row( 'Archive', formatBytes( a.size ) ) +
+						contents +
+						( a.complete ? row( 'Content size', formatBytes( m.files && m.files.size ) ) : '' ) +
+						common +
 						row( 'Active theme', m.active_theme && m.active_theme.stylesheet ) +
 						row( 'Active plugins', formatNumber( ( m.active_plugins || [] ).length ) ) +
 						'</dl>';
@@ -735,11 +831,47 @@
 				} );
 		}
 
-		function row( label, value ) {
+		function row( label, value, danger ) {
 			if ( value === undefined || value === null || value === '' ) {
 				return '';
 			}
-			return '<dt>' + escapeHtml( label ) + '</dt><dd>' + escapeHtml( value ) + '</dd>';
+			return '<dt>' + escapeHtml( label ) + '</dt><dd' + ( danger ? ' class="shcm-text-danger"' : '' ) + '>' + escapeHtml( value ) + '</dd>';
+		}
+
+		/**
+		 * What the archive says about its database. The footer (readable even
+		 * when the archive is encrypted) records what was actually written;
+		 * archives from version 1.0.0 only record a table count there. An
+		 * archive without a footer did not finish, so nothing is known about
+		 * what it holds: the manifest's counts are only what was planned.
+		 */
+		function databaseLine( a ) {
+			if ( ! a.complete ) {
+				return row( 'Database', 'unknown: the archive is incomplete', true );
+			}
+			var db = a.database_contents;
+			if ( db ) {
+				if ( ! db.included || ! db.tables ) {
+					return row( 'Database', 'NOT included: importing this archive leaves the database of this site unchanged', true );
+				}
+				return row( 'Database', 'Included: ' + formatNumber( db.tables ) + ' tables, ' + formatNumber( db.rows ) + ' rows, ' +
+					formatBytes( db.sql_bytes ) + ' of SQL' );
+			}
+			return row( 'Tables', a.tables ? formatNumber( a.tables ) : 'not recorded', ! a.tables );
+		}
+
+		/**
+		 * Files written to the archive, from its footer.
+		 */
+		function filesLine( a ) {
+			if ( ! a.complete ) {
+				return row( 'Files', 'unknown: the archive is incomplete', true );
+			}
+			var text = formatNumber( a.files || 0 );
+			if ( a.files_skipped ) {
+				return row( 'Files', text + ' (' + formatNumber( a.files_skipped ) + ' skipped during the export, see its log)', true );
+			}
+			return row( 'Files', text );
 		}
 
 		function updateStartState() {
@@ -931,7 +1063,7 @@
 					if ( result.ok ) {
 						output.className = 'shcm-verify-result is-ok';
 						output.textContent = strings.verified + ' (' + formatNumber( result.checked ) + ' entries, ' +
-							formatBytes( result.bytes ) + ')';
+							formatBytes( result.bytes ) + ' of uncompressed content)';
 					} else {
 						output.className = 'shcm-verify-result is-fail';
 						output.textContent = result.errors.join( ' ' );

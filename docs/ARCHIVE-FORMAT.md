@@ -37,7 +37,7 @@ reader reports that rather than restoring part of it.
 ```json
 {
   "format": 1,
-  "generator": "SH Clone Migration 1.0.0",
+  "generator": "SH Clone Migration 1.0.1",
   "created": 1789110462,
   "block_size": 1048576,
   "compress": "deflate",
@@ -92,6 +92,13 @@ placeholders before the payload and patched afterwards, and a fixed width
 guarantees the patch cannot change the header's length. Sizes are strings so
 they survive a JSON round trip above `PHP_INT_MAX` on a 32-bit build.
 
+JSON can only carry UTF-8, but file names are arbitrary bytes. A string that
+is not valid UTF-8 (a Latin-1 or CP437 file name, typically) is written as
+`"\u0000b64:"` followed by the base64 of its bytes, and read back as those
+exact bytes. A backslash in `p` is part of the name, not a separator; an
+importer on Windows, where it cannot be represented, treats it as a separator
+and applies the usual `..` checks afterwards.
+
 ## Payload blocks
 
 ```
@@ -140,25 +147,73 @@ to compare across archives.
 
 ```json
 {
-  "entries": 10125,
-  "raw_size": "196512345",
-  "stored": "70211045",
+  "entries": 10150,
+  "raw_size": "196908231",
+  "stored": "70321322",
   "completed": 1789110509,
   "manifest_entry": "manifest.json",
   "checksum_entry": "checksums/checksums.json",
   "checksum_digest": "…64 hex chars…",
+  "checksum_scheme": 2,
   "source": "https://example.com",
-  "files": 10063,
-  "tables": 50
+  "files": 10096,
+  "files_skipped": 3,
+  "skipped": { "scan": 2, "copy": 1 },
+  "tables": 50,
+  "database": { "included": true, "prefix": "wp_", "tables": 50,
+                "rows": 1119, "sql_bytes": 343104 },
+  "groups": { "meta": { "entries": 4, "bytes": 21170 },
+              "database": { "entries": 50, "bytes": 343104 },
+              "plugins": { "entries": 9675, "bytes": 177036912 }, "…": {} },
+  "warnings": 0,
+  "generator": "SH Clone Migration 1.0.1"
 }
 ```
 
-`checksum_digest` chains every entry's `path|digest` pair in archive order, so
-one comparison detects a missing, added, reordered or altered entry.
+`checksum_digest` chains one ledger item per entry, in archive order, with
+the same chained SHA-256 as the entries themselves, so one comparison detects
+a missing, added, reordered or altered entry. `checksum_scheme` says what a
+ledger item holds:
+
+| Scheme | Ledger item | Written by |
+|---|---|---|
+| 1 (or absent) | `path|digest` | 1.0.0 |
+| 2 | `path|type|link target|mode (4 octal digits)|digest` | 1.0.1 and later |
+
+Scheme 2 also covers what an entry has besides its payload: a symlink whose
+target was changed, or an entry whose type or permissions were altered, no
+longer passes. Verifiers read the scheme from the footer, so archives from
+1.0.0 still verify.
+
+The footer is never encrypted. From version 1.0.1 it records what was actually
+written rather than what the scan planned: the file entries archived; the
+files that are not in the archive (`files_skipped`, split in `skipped` into
+those the scan passed over — unreadable, or above the size limit — and those
+the copy had to give up on); whether the database is included, its tables,
+rows and SQL bytes as counted while dumping; and the entries and bytes per
+group. Version 1.0.0 footers only carry `files` and `tables` (the planned
+counts). The manifest's counts are what the scan planned and are never shown
+as an archive's contents; an archive without a footer has no known contents.
 
 The footer pointer at the very end lets a reader jump straight to it: an
-archive can be described (size, entry count, completeness, source URL) without
-reading it, and without the password when it is encrypted.
+archive can be described (size, entry count, completeness, source URL, database
+and file totals) without reading it, and without the password when it is
+encrypted. An archive without a valid footer is incomplete — still being
+written, or from an export that did not finish — and is neither offered for
+download nor accepted for import.
+
+## Checksum file
+
+Next to a finished archive the plugin writes `<archive>.wpress.sha256` in the
+format `sha256sum` reads and writes:
+
+```
+d5de21a000ee232e08c8e0f2eca739125d37491fd0f08e89443e81f2f2e416e3  site-20260924-084722-e385da5172904dec.wpress
+```
+
+It is the plain SHA-256 of the whole archive file, so `sha256sum -c`,
+`shasum -a 256` or `Get-FileHash -Algorithm SHA256` can check a downloaded
+copy. A checksum file older than its archive is ignored.
 
 ## Logical layout
 
@@ -169,6 +224,10 @@ manifest.json                     Everything about the source site
 config/metadata.json              Safe wp-config constants, .htaccess, robots.txt
 database/metadata.json            Prefix, charset, table list, sizes
 database/tables/<table>.sql       One entry per table: DROP, CREATE, INSERTs
+                                  (a name with characters outside [A-Za-z0-9_-]
+                                  gets them replaced by "_" plus "-" and the
+                                  first 8 hex digits of md5(name), so two
+                                  tables never share an entry)
 database/views.sql                Views, when present
 database/routines.json            Trigger definitions, when present
 files/<root>/<relative path>      Every file, by logical root
@@ -186,14 +245,18 @@ A file's path is recorded relative to a *logical root* rather than to
 
 | Root | Source | Destination |
 |---|---|---|
-| `wp-content` | `WP_CONTENT_DIR` | the destination's `WP_CONTENT_DIR` |
-| `plugins` | `WP_PLUGIN_DIR`, when outside the content directory | the destination's plugin directory |
-| `mu-plugins` | `WPMU_PLUGIN_DIR`, when outside | the destination's mu-plugin directory |
-| `uploads` | the uploads base directory, when outside | the destination's uploads directory |
-| `wp-root` | `ABSPATH`, only when core files are included | the destination's `ABSPATH` |
+| `wp-content` | `WP_CONTENT_DIR` (always) | the destination's `WP_CONTENT_DIR` |
+| `plugins` | `WP_PLUGIN_DIR`, when not physically inside the content directory | the destination's plugin directory |
+| `mu-plugins` | `WPMU_PLUGIN_DIR`, likewise | the destination's mu-plugin directory |
+| `uploads` | the uploads base directory, likewise (a symlinked uploads directory counts as outside) | the destination's uploads directory |
+| `wp-root` | `ABSPATH` minus the other roots, only when core files are included | the destination's `ABSPATH` |
 
-A root that lives inside another one is not recorded separately; its files are
-already covered by the parent walk.
+A root that physically lives inside another one is not recorded separately;
+its files are already covered by the parent walk. Containment is decided on
+real paths, so `wp-content/uploads -> ../../shared/uploads` becomes an
+`uploads` root instead of a symlink entry with nothing behind it. Archives made
+by version 1.0.0 with core files included stored `wp-content` under `wp-root`;
+importers map `wp-root/<content dir>/…` back to the content directory.
 
 ## Manifest
 
@@ -201,7 +264,7 @@ already covered by the parent walk.
 {
   "format": 1,
   "generator": "SH Clone Migration",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "created": 1789110462,
   "site": { "home": "…", "siteurl": "…", "name": "…", "language": "…",
             "multisite": false, "abspath": "…", "content_dir": "…",
@@ -222,8 +285,14 @@ already covered by the parent walk.
 ```
 
 The manifest holds no secrets: no database credentials, no authentication
-keys, no salts. It stays unencrypted so the import screen can describe an
-archive before the password is entered.
+keys, no salts. In an encrypted archive it is encrypted like every other
+entry; the import screen describes such an archive from the footer until the
+password is entered.
+
+From version 1.0.1 the manifest's `database` block also carries `included`
+(false when the export left the database out, in which case `tables` is 0 and
+`table_list` is empty), and the manifest records `effective_exclusions` (every
+pattern that applied, defaults and settings included) and `max_file_size`.
 
 ## Reading an archive without this plugin
 

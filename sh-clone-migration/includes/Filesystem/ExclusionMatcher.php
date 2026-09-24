@@ -18,6 +18,12 @@ defined( 'ABSPATH' ) || defined( 'SHCM_ALLOW_STANDALONE' ) || exit;
  *   *.log                 any file with that extension, at any depth
  *   * /node_modules       any directory with that name, at any depth
  *   uploads/2019/ *       everything below a directory
+ *
+ * A pattern without a slash ("cache", "*.log") matches that name at any
+ * depth. Patterns added as anchored (the "Excluded directories" setting,
+ * documented as paths relative to the WordPress root) never do: "cache"
+ * there means the top-level cache directory only, not every directory called
+ * cache inside every plugin.
  */
 class ExclusionMatcher {
 
@@ -40,12 +46,26 @@ class ExclusionMatcher {
 	}
 
 	/**
-	 * Add a pattern.
+	 * Add patterns that only ever match from the root.
 	 *
-	 * @param string $pattern Raw pattern.
+	 * @param string[] $patterns Raw patterns.
 	 * @return self
 	 */
-	public function add( $pattern ) {
+	public function addAnchored( array $patterns ) {
+		foreach ( $patterns as $pattern ) {
+			$this->add( $pattern, true );
+		}
+		return $this;
+	}
+
+	/**
+	 * Add a pattern.
+	 *
+	 * @param string $pattern  Raw pattern.
+	 * @param bool   $anchored Match from the root only, never by name at any depth.
+	 * @return self
+	 */
+	public function add( $pattern, $anchored = false ) {
 		$pattern = trim( str_replace( '\\', '/', (string) $pattern ) );
 		$pattern = ltrim( $pattern, '/' );
 		$pattern = rtrim( $pattern, '/' );
@@ -59,7 +79,7 @@ class ExclusionMatcher {
 		$this->patterns[] = array(
 			'raw'      => $pattern,
 			'wildcard' => $has_wildcard,
-			'slash'    => $has_slash,
+			'slash'    => $has_slash || (bool) $anchored,
 			'regex'    => $has_wildcard ? $this->toRegex( $pattern ) : '',
 		);
 		return $this;
@@ -76,6 +96,21 @@ class ExclusionMatcher {
 			$out[] = $pattern['raw'];
 		}
 		return $out;
+	}
+
+	/**
+	 * Whether any of several spellings of a path is excluded.
+	 *
+	 * @param string[] $paths Candidate relative paths.
+	 * @return bool
+	 */
+	public function matchesAny( array $paths ) {
+		foreach ( $paths as $path ) {
+			if ( $this->matches( $path ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

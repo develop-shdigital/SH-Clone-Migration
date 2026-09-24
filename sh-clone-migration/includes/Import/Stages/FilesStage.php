@@ -17,6 +17,7 @@ use SHCM\Jobs\AbstractStage;
 use SHCM\Jobs\Budget;
 use SHCM\Jobs\Job;
 use SHCM\Support\Bytes;
+use SHCM\Support\Json;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -135,6 +136,7 @@ class FilesStage extends AbstractStage {
 
 				if ( Format::TYPE_LINK === $entry['type'] ) {
 					$this->restoreSymlink( $job, $entry, $target, $state );
+					$this->trackGroup( $state, $entry['group'], 1, 0 );
 					$state['entry_offset'] = $reader->entryEndOffset( $entry );
 					$reader->skipEntry( $entry );
 					continue;
@@ -207,7 +209,26 @@ class FilesStage extends AbstractStage {
 			return null;
 		}
 		$root = substr( $relative, 0, $slash );
-		$rest = substr( $relative, $slash + 1 );
+		$rest = SafePath::sanitizeRelative( substr( $relative, $slash + 1 ) );
+		if ( null === $rest ) {
+			$job->addWarning( sprintf( 'Unsafe archive path rejected: %s', $entry['path'] ) );
+			$this->logger->warning( sprintf( 'Rejected unsafe archive path: %s', $entry['path'] ) );
+			$state['skipped']++;
+			return null;
+		}
+
+		// Archives made by version 1.0.0 with core files stored wp-content
+		// under the core root. Content belongs in the destination's content
+		// directory (wherever that is), and "skip core files" must not skip it.
+		if ( Paths::ROOT_CORE === $root ) {
+			$content_rel = $this->sourceContentPath( $job );
+			if ( '' !== $content_rel && 0 === strncmp( $rest, $content_rel . '/', strlen( $content_rel ) + 1 ) ) {
+				$root = Paths::ROOT_CONTENT;
+				$rest = substr( $rest, strlen( $content_rel ) + 1 );
+			} elseif ( $rest === $content_rel ) {
+				return null;
+			}
+		}
 
 		$base = Paths::resolveRoot( $root );
 		if ( null === $base ) {
@@ -249,6 +270,24 @@ class FilesStage extends AbstractStage {
 	}
 
 	/**
+	 * The source's content directory relative to its WordPress root
+	 * ("wp-content" normally), or '' when it lived elsewhere.
+	 *
+	 * @param Job $job Job.
+	 * @return string
+	 */
+	protected function sourceContentPath( Job $job ) {
+		$manifest = (array) $job->shared( 'manifest', array() );
+		$abspath  = isset( $manifest['wordpress']['abspath'] ) ? (string) $manifest['wordpress']['abspath'] : '';
+		$content  = isset( $manifest['wordpress']['content_dir'] ) ? (string) $manifest['wordpress']['content_dir'] : '';
+		if ( '' === $abspath || '' === $content ) {
+			return 'wp-content';
+		}
+		$relative = Paths::relativeTo( $content, $abspath );
+		return null === $relative ? '' : $relative;
+	}
+
+	/**
 	 * Paths that are never overwritten by a restore.
 	 *
 	 * @param string $root Logical root.
@@ -266,6 +305,10 @@ class FilesStage extends AbstractStage {
 			'web.config',
 		);
 
+		// Compared case-insensitively: on Windows and macOS "WP-CONFIG.PHP"
+		// is the same file, and over-protecting such a name elsewhere is
+		// harmless. $rest is already normalised (no "." or empty segments).
+		$rest = strtolower( $rest );
 		if ( Paths::ROOT_CORE === $root && in_array( $rest, $protected_root, true ) ) {
 			return true;
 		}
@@ -284,6 +327,7 @@ class FilesStage extends AbstractStage {
 		}
 
 		foreach ( $prefixes as $prefix ) {
+			$prefix = strtolower( $prefix );
 			if ( $rest === $prefix || 0 === strncmp( $rest, $prefix . '/', strlen( $prefix ) + 1 ) ) {
 				return true;
 			}
@@ -300,6 +344,11 @@ class FilesStage extends AbstractStage {
 	 * @throws \RuntimeException When the directory cannot be created.
 	 */
 	protected function prepareFile( $target ) {
+		// A file entry replaces whatever link stands at its path; writing
+		// through a link would put the bytes wherever the link points.
+		if ( is_link( $target ) ) {
+			@unlink( $target );
+		}
 		$dir = dirname( $target );
 		if ( ! is_dir( $dir ) && ! @mkdir( $dir, 0755, true ) && ! is_dir( $dir ) ) {
 			throw new \RuntimeException(
@@ -350,15 +399,45 @@ class FilesStage extends AbstractStage {
 		if ( '/' !== substr( $link_target, 0, 1 ) ) {
 			$resolved = dirname( $target ) . '/' . $link_target;
 		}
-		$resolved = Paths::normalize( $resolved );
+		// Collapse "..": "uploads/../../../../etc" must not pass a prefix test.
+		$resolved = Paths::collapse( $resolved );
+
+		// The kernel resolves a symlinked path component before it applies a
+		// later "..", so "s1/../outside" is not what it looks like when s1 is
+		// itself a link. Refuse any target that passes through a link.
+		$walk = '/' === substr( $link_target, 0, 1 ) ? '' : dirname( $target );
+		$parts = explode( '/', str_replace( '\\', '/', $link_target ) );
+		array_pop( $parts );
+		foreach ( $parts as $part ) {
+			if ( '' === $part || '.' === $part ) {
+				continue;
+			}
+			$walk = '..' === $part ? dirname( '' === $walk ? '/' : $walk ) : $walk . '/' . $part;
+			if ( is_link( $walk ) ) {
+				$job->addWarning(
+					Json::printable(
+						sprintf(
+							/* translators: 1: link, 2: target */
+							__( 'Symlink %1$s was not recreated because its target (%2$s) passes through another symlink.', 'sh-clone-migration' ),
+							$entry['path'],
+							$link_target
+						)
+					)
+				);
+				$state['skipped']++;
+				return;
+			}
+		}
 
 		if ( ! Paths::isInside( $resolved, Paths::abspath() ) && ! Paths::isInside( $resolved, Paths::contentDir() ) ) {
 			$job->addWarning(
-				sprintf(
-					/* translators: 1: link, 2: target */
-					__( 'Symlink %1$s was not recreated because it points outside the installation (%2$s).', 'sh-clone-migration' ),
-					$entry['path'],
-					$link_target
+				Json::printable(
+					sprintf(
+						/* translators: 1: link, 2: target */
+						__( 'Symlink %1$s was not recreated because it points outside the installation (%2$s).', 'sh-clone-migration' ),
+						$entry['path'],
+						$link_target
+					)
 				)
 			);
 			$state['skipped']++;
@@ -366,11 +445,25 @@ class FilesStage extends AbstractStage {
 		}
 
 		if ( is_link( $target ) || file_exists( $target ) ) {
+			$existing = is_link( $target ) ? (string) @readlink( $target ) : '';
+			if ( $existing !== $link_target ) {
+				$job->addWarning(
+					Json::printable(
+						sprintf(
+							/* translators: 1: link, 2: target */
+							__( 'Symlink %1$s (-> %2$s) was not recreated because something already exists at that path on this site.', 'sh-clone-migration' ),
+							$entry['path'],
+							$link_target
+						)
+					)
+				);
+				$state['skipped']++;
+			}
 			return;
 		}
 		$this->prepareFile( $target );
 		if ( ! @symlink( $link_target, $target ) ) {
-			$job->addWarning( sprintf( 'Symlink could not be created: %s', $entry['path'] ) );
+			$job->addWarning( Json::printable( sprintf( 'Symlink could not be created: %s', $entry['path'] ) ) );
 			$state['skipped']++;
 			return;
 		}

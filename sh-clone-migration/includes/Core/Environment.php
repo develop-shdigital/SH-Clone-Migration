@@ -279,12 +279,122 @@ class Environment {
 				'label' => __( 'Database connection', 'sh-clone-migration' ),
 				'value' => ( isset( $wpdb ) && $wpdb->check_connection( false ) ) ? __( 'OK', 'sh-clone-migration' ) : __( 'FAILED', 'sh-clone-migration' ),
 			),
+			'download_delivery'  => array(
+				'label' => __( 'Archive downloads', 'sh-clone-migration' ),
+				'value' => $this->downloadDelivery( true )['value'],
+			),
 		);
 
 		return array(
 			'rows'         => $rows,
 			'capabilities' => $caps,
 			'warnings'     => $this->warnings(),
+		);
+	}
+
+	/**
+	 * Whether archive downloads reach the browser with their exact size.
+	 *
+	 * Measured, not assumed: ServerRules::probe() downloads a small file
+	 * through the download path over a loopback request. The result is
+	 * cached; $probe allows running the check when nothing is cached (page
+	 * loads in wp-admin, never an AJAX tick or WP-CLI, where no web server
+	 * is involved).
+	 *
+	 * @param bool $probe Run the loopback check when no result is cached.
+	 * @return array{ok: bool|null, value: string, status: string} ok is null
+	 *         when it could not be determined.
+	 */
+	public function downloadDelivery( $probe = false ) {
+		global $is_apache;
+
+		$cli    = ( defined( 'WP_CLI' ) && WP_CLI ) || 'cli' === PHP_SAPI;
+		$result = get_transient( ServerRules::PROBE_TRANSIENT );
+		if ( ! is_array( $result ) && $probe && ! $cli ) {
+			$result = ServerRules::probe( true );
+		}
+		$status = is_array( $result ) && isset( $result['status'] ) ? $result['status'] : 'unchecked';
+
+		if ( 'ok' === $status ) {
+			return array(
+				'ok'     => true,
+				'status' => $status,
+				'value'  => __( 'exact size sent (checked with a test download)', 'sh-clone-migration' ),
+			);
+		}
+		if ( 'stripped' === $status ) {
+			return array(
+				'ok'     => false,
+				'status' => $status,
+				/* translators: %s: what the test download received */
+				'value'  => sprintf( __( 'the server removes the size (test download: %s)', 'sh-clone-migration' ), $result['detail'] ),
+			);
+		}
+		if ( $cli ) {
+			return array(
+				'ok'     => null,
+				'status' => $status,
+				'value'  => __( 'not checked from the command line (open System Status in the browser)', 'sh-clone-migration' ),
+			);
+		}
+		if ( ! empty( $is_apache ) && 'apache2handler' !== PHP_SAPI && ! ServerRules::installed() ) {
+			return array(
+				'ok'     => false,
+				'status' => $status,
+				'value'  => __( 'the server probably removes the size (.htaccess rule missing, test download not possible)', 'sh-clone-migration' ),
+			);
+		}
+		return array(
+			'ok'     => null,
+			'status' => $status,
+			'value'  => 'unknown' === $status
+				/* translators: %s: error */
+				? sprintf( __( 'not checked: the test download failed (%s)', 'sh-clone-migration' ), $result['detail'] )
+				: __( 'not checked yet', 'sh-clone-migration' ),
+		);
+	}
+
+	/**
+	 * The warning, with the fix that fits this server, for downloads that
+	 * lose their size.
+	 *
+	 * @param array $delivery downloadDelivery() result.
+	 * @return array
+	 */
+	protected function deliveryWarning( array $delivery ) {
+		global $is_apache;
+
+		$intro = __( 'Archive downloads lose their size on this server, so download managers report "file size unknown" and cannot resume. The archive itself is still complete: compare its size in bytes and its SHA-256.', 'sh-clone-migration' );
+
+		if ( empty( $is_apache ) ) {
+			return array(
+				'level'   => 'warning',
+				'message' => $intro . ' ' . __( 'This is not Apache. On nginx, make sure gzip_types does not include application/octet-stream; behind a proxy or CDN, make sure it does not compress downloads.', 'sh-clone-migration' ),
+			);
+		}
+
+		$root_rules = is_file( ServerRules::htaccessPath() ) && ServerRules::hasRewriteRules( (string) @file_get_contents( ServerRules::htaccessPath() ) );
+		if ( ServerRules::installed() ) {
+			$message = __( 'The rule the plugin added to .htaccess is not applied by this server (for example AllowOverride None, or PHP proxied with ProxyPassMatch). Ask your host to add this line to the server configuration (virtual host):', 'sh-clone-migration' );
+			$code    = ServerRules::serverConfig();
+		} elseif ( $root_rules ) {
+			$message = sprintf(
+				/* translators: %s: .htaccess path */
+				__( 'The plugin could not add its rule to %s. Add these lines at the top of that file (or ask your host to add the single line after them to the server configuration):', 'sh-clone-migration' ),
+				ServerRules::htaccessPath()
+			);
+			$code = ServerRules::block() . "\n" . ServerRules::serverConfig();
+		} else {
+			// Without rewrite rules there, the host may not allow them in
+			// .htaccess at all, and pasting some would cause a 500 error.
+			$message = __( 'This site does not use .htaccess rewrite rules, so the plugin does not add any. Ask your host to add this line to the server configuration (virtual host):', 'sh-clone-migration' );
+			$code    = ServerRules::serverConfig();
+		}
+
+		return array(
+			'level'   => 'warning',
+			'message' => $intro . ' ' . $message,
+			'code'    => $code,
 		);
 	}
 
@@ -317,6 +427,10 @@ class Environment {
 					$this->storage->base()
 				),
 			);
+		}
+		$delivery = $this->downloadDelivery( true );
+		if ( false === $delivery['ok'] ) {
+			$warnings[] = $this->deliveryWarning( $delivery );
 		}
 		if ( ! $caps['writable_content'] ) {
 			$warnings[] = array(

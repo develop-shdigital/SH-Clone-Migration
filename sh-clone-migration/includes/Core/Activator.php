@@ -39,6 +39,8 @@ class Activator {
 		if ( ! wp_next_scheduled( 'shcm_cleanup' ) ) {
 			wp_schedule_event( time() + 300, 'daily', 'shcm_cleanup' );
 		}
+
+		ServerRules::install();
 	}
 
 	/**
@@ -52,5 +54,7 @@ class Activator {
 
 		// A migration must never leave the site behind a maintenance page.
 		\SHCM\Import\MaintenanceMode::disable();
+
+		ServerRules::remove();
 	}
 }

@@ -28,6 +28,9 @@ Menu::header(
 <?php foreach ( $shcm_warnings as $shcm_warning ) : ?>
 	<div class="shcm-alert shcm-alert--<?php echo esc_attr( $shcm_warning['level'] ); ?>">
 		<?php echo esc_html( $shcm_warning['message'] ); ?>
+		<?php if ( ! empty( $shcm_warning['code'] ) ) : ?>
+			<pre class="shcm-code"><?php echo esc_html( $shcm_warning['code'] ); ?></pre>
+		<?php endif; ?>
 	</div>
 <?php endforeach; ?>
 
@@ -121,6 +124,7 @@ Menu::header(
 	<?php if ( empty( $shcm_archives ) ) : ?>
 		<p class="shcm-empty"><?php esc_html_e( 'No migration archives yet.', 'sh-clone-migration' ); ?></p>
 	<?php else : ?>
+		<div class="shcm-table-scroll">
 		<table class="widefat striped shcm-table">
 			<thead>
 			<tr>
@@ -142,12 +146,17 @@ Menu::header(
 							<span class="shcm-tag shcm-tag--warn"><?php esc_html_e( 'incomplete', 'sh-clone-migration' ); ?></span>
 						<?php endif; ?>
 					</td>
-					<td><?php echo esc_html( Bytes::format( $shcm_archive['size'] ) ); ?></td>
+					<td>
+						<?php echo esc_html( Bytes::format( $shcm_archive['size'] ) ); ?>
+						<br><span class="description"><?php echo esc_html( \SHCM\Admin\ArchiveSummary::exactSize( $shcm_archive['size'] ) ); ?></span>
+					</td>
 					<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' H:i', $shcm_archive['created'] ) ); ?></td>
 					<td class="shcm-actions">
-						<a class="button button-small" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=shcm_download&archive=' . rawurlencode( $shcm_archive['name'] ) ), 'shcm_download' ) ); ?>">
-							<?php esc_html_e( 'Download', 'sh-clone-migration' ); ?>
-						</a>
+						<?php if ( ! empty( $shcm_archive['complete'] ) ) : ?>
+							<a class="button button-small" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=shcm_download&archive=' . rawurlencode( $shcm_archive['name'] ) ), 'shcm_download' ) ); ?>">
+								<?php esc_html_e( 'Download', 'sh-clone-migration' ); ?>
+							</a>
+						<?php endif; ?>
 						<a class="button button-small" href="<?php echo esc_url( admin_url( 'admin.php?page=shcm-backups' ) ); ?>">
 							<?php esc_html_e( 'Manage', 'sh-clone-migration' ); ?>
 						</a>
@@ -156,5 +165,6 @@ Menu::header(
 			<?php endforeach; ?>
 			</tbody>
 		</table>
+		</div>
 	<?php endif; ?>
 </div>

@@ -87,6 +87,10 @@ class Ajax {
 		}
 		add_action( 'admin_post_shcm_download', array( $this, 'download' ) );
 		add_action( 'admin_post_shcm_download_log', array( $this, 'downloadLog' ) );
+		// The delivery self-test is fetched by the site itself, without a
+		// session; it serves one fixed, harmless file.
+		add_action( 'admin_post_shcm_download_probe', array( $this, 'downloadProbe' ) );
+		add_action( 'admin_post_nopriv_shcm_download_probe', array( $this, 'downloadProbe' ) );
 	}
 
 	/**
@@ -340,7 +344,7 @@ class Ajax {
 
 	/**
 	 * Stream an archive to the browser, with range support so that a large
-	 * download can be resumed.
+	 * download can be resumed or split by a download manager.
 	 *
 	 * @return void
 	 */
@@ -356,11 +360,51 @@ class Ajax {
 			wp_die( esc_html__( 'That archive could not be found.', 'sh-clone-migration' ), 404 );
 		}
 
-		$this->plugin->logger()->channel( 'plugin' )->info(
-			sprintf( 'Archive %1$s downloaded by user %2$d.', basename( $path ), get_current_user_id() )
-		);
+		// An archive without its footer is still being written (or its export
+		// failed). Handing it out would produce a file that can never be
+		// imported, so say so instead.
+		if ( null === \SHCM\Archive\Reader::readFooter( $path ) ) {
+			wp_die(
+				esc_html__( 'This archive is incomplete: its export is still running or did not finish. Wait for the export to complete, or run it again.', 'sh-clone-migration' ),
+				esc_html__( 'Archive incomplete', 'sh-clone-migration' ),
+				array( 'response' => 409 )
+			);
+		}
 
-		$this->streamFile( $path, 'application/octet-stream' );
+		$sender = new FileSender();
+		$extra  = array();
+		$sha256 = $catalog->sha256( $path );
+		if ( '' !== $sha256 ) {
+			$extra['X-SHCM-SHA256'] = $sha256;
+		}
+
+		// A download manager opens several connections for one download; log
+		// the download once, not once per segment.
+		if ( $sender->isInitialRequest() ) {
+			$this->plugin->logger()->channel( 'plugin' )->info(
+				sprintf(
+					'Archive %1$s (%2$s bytes) downloaded by user %3$d.',
+					basename( $path ),
+					(string) @filesize( $path ),
+					get_current_user_id()
+				)
+			);
+		}
+
+		$sender->send( $path, 'application/octet-stream', basename( $path ), $extra );
+	}
+
+	/**
+	 * Serve the delivery probe file, through exactly the path an archive
+	 * download takes, so ServerRules::probe() can see what the web server
+	 * does to it.
+	 *
+	 * @return void
+	 */
+	public function downloadProbe() {
+		$storage = $this->plugin->storage();
+		$storage->prepare();
+		( new FileSender() )->send( \SHCM\Core\ServerRules::probeFile( $storage->tmp() ), 'application/octet-stream', 'shcm-delivery-probe.bin' );
 	}
 
 	/**
@@ -380,75 +424,6 @@ class Ajax {
 			wp_die( esc_html__( 'That migration log could not be found.', 'sh-clone-migration' ), 404 );
 		}
 
-		$this->streamFile( $path, 'text/plain; charset=utf-8', 'shcm-' . $job_id . '.log' );
-	}
-
-	/**
-	 * Send a file with range support.
-	 *
-	 * @param string $path         Absolute path.
-	 * @param string $content_type MIME type.
-	 * @param string $filename     Optional download name.
-	 * @return void
-	 */
-	protected function streamFile( $path, $content_type, $filename = '' ) {
-		$size   = (int) filesize( $path );
-		$start  = 0;
-		$end    = $size - 1;
-		$status = 200;
-
-		$range = isset( $_SERVER['HTTP_RANGE'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_RANGE'] ) ) : '';
-		if ( '' !== $range && preg_match( '/bytes=(\d*)-(\d*)/', $range, $matches ) ) {
-			if ( '' !== $matches[1] ) {
-				$start = (int) $matches[1];
-			}
-			if ( '' !== $matches[2] ) {
-				$end = (int) $matches[2];
-			}
-			if ( $start > $end || $start >= $size ) {
-				header( 'Content-Range: bytes */' . $size );
-				status_header( 416 );
-				exit;
-			}
-			$status = 206;
-		}
-
-		$length = $end - $start + 1;
-
-		while ( ob_get_level() ) {
-			ob_end_clean();
-		}
-
-		status_header( $status );
-		header( 'Content-Type: ' . $content_type );
-		header( 'Content-Disposition: attachment; filename="' . ( '' !== $filename ? $filename : basename( $path ) ) . '"' );
-		header( 'Content-Length: ' . $length );
-		header( 'Accept-Ranges: bytes' );
-		header( 'X-Content-Type-Options: nosniff' );
-		header( 'Cache-Control: private, no-store' );
-		if ( 206 === $status ) {
-			header( sprintf( 'Content-Range: bytes %1$d-%2$d/%3$d', $start, $end, $size ) );
-		}
-
-		$handle = fopen( $path, 'rb' );
-		if ( ! $handle ) {
-			wp_die( esc_html__( 'The archive could not be opened for reading.', 'sh-clone-migration' ), 500 );
-		}
-		if ( $start > 0 ) {
-			fseek( $handle, $start );
-		}
-
-		$remaining = $length;
-		while ( $remaining > 0 && ! feof( $handle ) ) {
-			$chunk = fread( $handle, (int) min( 1048576, $remaining ) );
-			if ( false === $chunk || '' === $chunk ) {
-				break;
-			}
-			echo $chunk; // phpcs:ignore WordPress.Security.EscapeOutput
-			flush();
-			$remaining -= strlen( $chunk );
-		}
-		fclose( $handle );
-		exit;
+		( new FileSender() )->send( $path, 'text/plain; charset=utf-8', 'shcm-' . $job_id . '.log' );
 	}
 }

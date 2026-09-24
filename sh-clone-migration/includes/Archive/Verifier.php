@@ -22,6 +22,13 @@ defined( 'ABSPATH' ) || defined( 'SHCM_ALLOW_STANDALONE' ) || exit;
 class Verifier {
 
 	/**
+	 * Ledger scheme of the archive being verified (null until known).
+	 *
+	 * @var int|null
+	 */
+	protected $scheme = null;
+
+	/**
 	 * Reader.
 	 *
 	 * @var Reader
@@ -102,23 +109,75 @@ class Verifier {
 	 */
 	public function verifyEntries( array $state, ?Budget $budget = null ) {
 		$this->reader->seek( $state['offset'] );
+		$units = 0;
 
 		while ( true ) {
-			if ( $budget && $budget->expired() ) {
+			// At least one unit of work per call, whatever the budget says:
+			// a request that starts with its budget already spent (memory
+			// close to the guard, a slow key derivation) must still move on.
+			if ( $budget && ! $budget->shouldContinue( $units ) ) {
 				break;
 			}
 
-			$entry = $this->reader->nextEntry();
-			if ( null === $entry ) {
-				$state['done'] = true;
-				break;
+			if ( ! empty( $state['current'] ) ) {
+				// Part way through a large entry from the previous request.
+				$this->reader->seek( (int) $state['current']['header'] );
+				$entry    = $this->reader->nextEntry();
+				$position = (int) $state['current']['pos'];
+				$hash     = hex2bin( $state['current']['hash'] );
+				$size     = (int) $state['current']['size'];
+			} else {
+				$entry = $this->reader->nextEntry();
+				if ( null === $entry ) {
+					$state['done'] = true;
+					break;
+				}
+				$position = $entry['payload_offset'];
+				$hash     = Format::initialHashState();
+				$size     = 0;
 			}
 
-			$hash = Format::initialHashState();
-			$size = 0;
-			foreach ( $this->reader->blocks( $entry ) as $block ) {
+			$end      = $this->reader->entryEndOffset( $entry );
+			$finished = true;
+			foreach ( $this->reader->blocksFromOffset( $entry, $position ) as $block ) {
 				$hash  = Format::advanceHash( $hash, $block );
 				$size += strlen( $block );
+				++$units;
+				if ( $budget && $this->reader->tell() < $end && ! $budget->shouldContinue( $units ) ) {
+					// A multi-gigabyte entry does not have to fit in one request.
+					$state['current'] = array(
+						'header' => $entry['header_offset'],
+						'pos'    => $this->reader->tell(),
+						'hash'   => bin2hex( $hash ),
+						'size'   => $size,
+					);
+					$state['offset']  = $entry['header_offset'];
+					$finished         = false;
+					break;
+				}
+			}
+			if ( ! $finished ) {
+				break;
+			}
+			unset( $state['current'] );
+			++$units;
+
+			// A directory or link has no payload, and only a link has a
+			// target: anything else is a damaged header.
+			if ( Format::TYPE_FILE !== $entry['type'] && ( 0 !== (int) $entry['size'] || 0 !== (int) $entry['stored'] ) ) {
+				$state['errors'][] = sprintf(
+					/* translators: %s: entry path */
+					__( 'Damaged entry header for %s.', 'sh-clone-migration' ),
+					\SHCM\Support\Json::printable( $entry['path'] )
+				);
+			}
+			if ( ! in_array( $entry['type'], array( Format::TYPE_FILE, Format::TYPE_DIR, Format::TYPE_LINK ), true )
+				|| ( Format::TYPE_LINK !== $entry['type'] && '' !== (string) $entry['target'] ) ) {
+				$state['errors'][] = sprintf(
+					/* translators: %s: entry path */
+					__( 'Damaged entry header for %s.', 'sh-clone-migration' ),
+					\SHCM\Support\Json::printable( $entry['path'] )
+				);
 			}
 
 			$digest = bin2hex( $hash );
@@ -126,19 +185,22 @@ class Verifier {
 				$state['errors'][] = sprintf(
 					/* translators: %s: entry path */
 					__( 'Checksum mismatch for %s.', 'sh-clone-migration' ),
-					$entry['path']
+					\SHCM\Support\Json::printable( $entry['path'] )
 				);
 			}
 			if ( $size !== (int) $entry['size'] ) {
 				$state['errors'][] = sprintf(
 					/* translators: %s: entry path */
 					__( 'Size mismatch for %s.', 'sh-clone-migration' ),
-					$entry['path']
+					\SHCM\Support\Json::printable( $entry['path'] )
 				);
 			}
 
 			$state['digest'] = bin2hex(
-				Format::advanceHash( hex2bin( $state['digest'] ), $entry['path'] . '|' . $entry['hash'] )
+				Format::advanceHash(
+					hex2bin( $state['digest'] ),
+					Format::ledgerItem( $this->ledgerScheme(), $entry['path'], $entry['type'], (string) $entry['target'], (int) $entry['mode'], $entry['hash'] )
+				)
 			);
 			$state['checked']++;
 			$state['bytes'] += $size;
@@ -161,6 +223,19 @@ class Verifier {
 		}
 
 		return $state;
+	}
+
+	/**
+	 * Which ledger scheme the footer's digest was built with.
+	 *
+	 * @return int
+	 */
+	protected function ledgerScheme() {
+		if ( null === $this->scheme ) {
+			$footer       = $this->reader->footer();
+			$this->scheme = is_array( $footer ) && isset( $footer['checksum_scheme'] ) ? (int) $footer['checksum_scheme'] : 1;
+		}
+		return $this->scheme;
 	}
 
 	/**

@@ -49,6 +49,7 @@ Menu::header(
 	<?php if ( empty( $shcm_archives ) ) : ?>
 		<p class="shcm-empty"><?php esc_html_e( 'No archives stored on this server.', 'sh-clone-migration' ); ?></p>
 	<?php else : ?>
+		<div class="shcm-table-scroll">
 		<table class="widefat striped shcm-table" id="shcm-backups-table">
 			<thead>
 			<tr>
@@ -74,25 +75,31 @@ Menu::header(
 						<div class="shcm-verify-result" data-role="verify-result"></div>
 					</td>
 					<td><?php echo esc_html( $shcm_archive['source'] ? $shcm_archive['source'] : '—' ); ?></td>
-					<td>
-						<?php
-						printf(
-							/* translators: 1: number of files, 2: number of tables */
-							esc_html__( '%1$s files, %2$s tables', 'sh-clone-migration' ),
-							esc_html( number_format_i18n( $shcm_archive['files'] ) ),
-							esc_html( number_format_i18n( $shcm_archive['tables'] ) )
-						);
-						?>
+					<td class="shcm-contents">
+						<?php $shcm_db = \SHCM\Admin\ArchiveSummary::database( $shcm_archive ); ?>
+						<span class="<?php echo $shcm_db['missing'] ? 'shcm-text-danger' : ''; ?>"><?php echo esc_html( $shcm_db['text'] ); ?></span>
+						<br><span class="<?php echo empty( $shcm_archive['complete'] ) ? 'shcm-text-danger' : ''; ?>"><?php echo esc_html( \SHCM\Admin\ArchiveSummary::files( $shcm_archive ) ); ?></span>
 						<?php if ( ! empty( $shcm_archive['wordpress'] ) ) : ?>
 							<br><span class="description"><?php echo esc_html( 'WordPress ' . $shcm_archive['wordpress'] . ' / PHP ' . $shcm_archive['php'] ); ?></span>
 						<?php endif; ?>
+						<?php if ( ! empty( $shcm_archive['sha256'] ) ) : ?>
+							<br><span class="description"><?php esc_html_e( 'SHA-256:', 'sh-clone-migration' ); ?></span>
+							<code class="shcm-hash" title="<?php esc_attr_e( 'Compare with: sha256sum <file> (Linux/macOS: shasum -a 256) or Get-FileHash <file> -Algorithm SHA256 (Windows PowerShell)', 'sh-clone-migration' ); ?>"><?php echo esc_html( $shcm_archive['sha256'] ); ?></code>
+						<?php endif; ?>
 					</td>
-					<td><?php echo esc_html( Bytes::format( $shcm_archive['size'] ) ); ?></td>
+					<td>
+						<?php echo esc_html( Bytes::format( $shcm_archive['size'] ) ); ?>
+						<br><span class="description"><?php echo esc_html( \SHCM\Admin\ArchiveSummary::exactSize( $shcm_archive['size'] ) ); ?></span>
+					</td>
 					<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' H:i', $shcm_archive['created'] ) ); ?></td>
 					<td class="shcm-actions">
-						<a class="button button-small" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=shcm_download&archive=' . rawurlencode( $shcm_archive['name'] ) ), 'shcm_download' ) ); ?>">
-							<?php esc_html_e( 'Download', 'sh-clone-migration' ); ?>
-						</a>
+						<?php if ( ! empty( $shcm_archive['complete'] ) ) : ?>
+							<a class="button button-small" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=shcm_download&archive=' . rawurlencode( $shcm_archive['name'] ) ), 'shcm_download' ) ); ?>">
+								<?php esc_html_e( 'Download', 'sh-clone-migration' ); ?>
+							</a>
+						<?php else : ?>
+							<span class="description"><?php esc_html_e( 'Still being written, or the export did not finish', 'sh-clone-migration' ); ?></span>
+						<?php endif; ?>
 						<button type="button" class="button button-small" data-action="verify"><?php esc_html_e( 'Verify', 'sh-clone-migration' ); ?></button>
 						<button type="button" class="button button-small button-link-delete" data-action="delete"><?php esc_html_e( 'Delete', 'sh-clone-migration' ); ?></button>
 					</td>
@@ -100,6 +107,7 @@ Menu::header(
 			<?php endforeach; ?>
 			</tbody>
 		</table>
+		</div>
 	<?php endif; ?>
 </div>
 
@@ -108,6 +116,7 @@ Menu::header(
 	<?php if ( empty( $shcm_jobs ) ) : ?>
 		<p class="shcm-empty"><?php esc_html_e( 'No migration jobs recorded.', 'sh-clone-migration' ); ?></p>
 	<?php else : ?>
+		<div class="shcm-table-scroll">
 		<table class="widefat striped shcm-table">
 			<thead>
 			<tr>
@@ -142,5 +151,6 @@ Menu::header(
 			<?php endforeach; ?>
 			</tbody>
 		</table>
+		</div>
 	<?php endif; ?>
 </div>

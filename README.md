@@ -45,13 +45,19 @@ auto-increment values, views and triggers are all preserved.
 
 Tables belonging to a *different* WordPress installation that happens to share
 the same database are detected and left alone (there is an option to include
-them).
+them), also when one prefix starts with the other (`wp_` next to `wp_shop_`).
+The database is always included unless you switch it off, and the export
+stops with an explanation rather than produce an archive whose database is
+empty, missing a core table, or cut short by a database error.
 
 **Files** — the complete `wp-content` tree: plugins (active and inactive),
 themes (parents and children), the uploads library with its full directory
 structure and original filenames, must-use plugins, languages, drop-ins and
 any custom directory a plugin invented. Optionally the WordPress core files
-and root files too.
+and root files too. A symlinked uploads or plugin directory (deploy layouts
+such as Capistrano, Envoyer or Pantheon) is archived with its contents, file
+names that are not UTF-8 are kept byte for byte, and anything that cannot be
+archived is named in a warning and in the log — never dropped silently.
 
 **Everything that lives in those two places** — posts, pages, custom post
 types, taxonomies, categories, tags, comments, users, roles and capabilities,
@@ -109,9 +115,22 @@ The export runs through these stages, and each one is resumable:
 4. **Export the files** — plugins, themes, uploads, mu-plugins, everything
    else, streamed block by block.
 5. **Finalise** — write the checksum ledger and close the archive.
-6. **Verify** — read the finished archive back and recompute every checksum.
+6. **Verify** — read the finished archive back, recompute every checksum, and
+   compute the SHA-256 of the whole file.
 
-Only when verification passes does the download button appear.
+Only when verification passes does the download button appear, together with
+exactly what the archive contains:
+
+- the archive size in bytes and its SHA-256, with the commands to check a
+  downloaded copy (`Get-FileHash .\<file> -Algorithm SHA256` on Windows,
+  `shasum -a 256 <file>` on macOS, `sha256sum <file>` on Linux);
+- **Database: included — N tables, M rows** (counted while dumping, not
+  estimated), or a red **NOT included**;
+- the files per group (plugins, themes, uploads, …) and anything skipped;
+- whether every entry was verified or only the structure (quick mode).
+
+The Backups screen shows the same for every stored archive, and
+`wp shcm export` prints it.
 
 Progress is reported per stage with real counts (tables, files, bytes), and
 the numbers come from the server, never from the browser.
@@ -270,8 +289,10 @@ Everything is a performance or policy knob; none of it limits migration size.
   protected by `.htaccess`, `web.config` and `index.php` files, every archive
   name carries 64 bits of randomness, and the plugin actively tests whether
   the directory is reachable over HTTP and warns you if it is.
-- Downloads are streamed through an authenticated endpoint with a nonce, and
-  support HTTP range requests so a large download can be resumed.
+- Downloads are streamed through an authenticated endpoint with a nonce, with
+  an exact `Content-Length`, validators and correct HTTP range handling, so
+  browsers and download managers can show progress, split and resume a large
+  download. An archive that is still being written is never handed out.
 - Uploaded archives are validated by magic bytes before the rest of the upload
   is accepted, and again in full before a restore starts.
 - Extraction refuses absolute paths, `..` traversal, Windows drive letters,
@@ -292,6 +313,31 @@ Everything is a performance or policy knob; none of it limits migration size.
 See [docs/SECURITY.md](docs/SECURITY.md) for the full threat model.
 
 ## Troubleshooting
+
+**The download manager says "the file size is unknown" / "may not have been
+downloaded completely".**
+The server removed the size from the response. Two common causes: Apache with
+PHP-FPM (since Apache 2.4.59 it drops `Content-Length` from every PHP response
+unless told otherwise), and hosts that compress every response ("Compress all
+content" in cPanel). The plugin adds a small marked block to your `.htaccess`
+that fixes both for archive downloads, and then checks with a test download
+whether it worked. **System Status → Archive downloads** shows the result and,
+when the size is still lost, what to add: the `.htaccess` lines if the plugin
+could not write them, or a single `SetEnvIfExpr` line for your host to put in
+the server configuration when `.htaccess` rules are not applied. Either way
+the downloaded archive is normally complete: compare its
+size in bytes and its SHA-256 with the values on the export screen or the
+Backups screen. The import also re-verifies every entry before it changes
+anything, so a damaged copy is always refused.
+
+**Is the database in my archive?**
+Yes, unless you switched it off. The export result, the Backups screen and the
+import screen show **Database: included — N tables, M rows** for every archive
+made with version 1.0.1 or later (archives from 1.0.0 show the table count).
+An export that cannot read a table, finds no tables, or is missing a core
+table stops with the reason instead of producing an archive. An archive whose
+export did not finish is marked *incomplete*, shows "contents unknown", and
+can be neither downloaded nor imported.
 
 **"Migration archive validation failed."**
 The archive is incomplete or was damaged in transfer. Re-download or re-upload
@@ -363,6 +409,10 @@ These are environmental, not artificial:
   table and suggests raising the limit.
 - **Object cache drop-ins.** `advanced-cache.php` is excluded by default
   because it points at a caching plugin's configuration for the source server.
+- **Download size on some servers.** Behind nginx with `gzip_types` covering
+  `application/octet-stream`, or a proxy that compresses everything, PHP
+  cannot keep the `Content-Length` of a download. The archive still arrives
+  complete; check it by size and SHA-256.
 
 ## Documentation
 

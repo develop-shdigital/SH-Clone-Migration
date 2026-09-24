@@ -4,7 +4,7 @@ Tags: migration, clone, backup, duplicate, move site
 Requires at least: 5.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -178,6 +178,14 @@ go through an authenticated endpoint. Because some web servers ignore
 `.htaccess`, the plugin actively tests whether the directory is reachable and
 warns you when it is.
 
+= My download manager says the file size is unknown. Is the download complete? =
+
+Almost certainly. The size was removed by the web server, not missing from the file: Apache with PHP-FPM (2.4.59 and later) drops the size of every PHP response unless told otherwise, and hosts that compress every response do the same. Version 1.0.1 adds a small marked block to .htaccess that keeps the exact size for archive downloads; System Status shows whether it is in place. To check a download, compare its size in bytes and its SHA-256 (shown after the export and on the Backups screen) with `Get-FileHash <file> -Algorithm SHA256` on Windows, `shasum -a 256 <file>` on macOS or `sha256sum <file>` on Linux. The import re-verifies every entry before it changes anything.
+
+= Is the database included in the export? =
+
+Yes, always, unless you switch it off. After the export, on the Backups screen and on the import screen you see "Database: included — N tables, M rows", counted while the tables were written. An export that cannot read a table completely, finds no tables, or misses a core table stops with the reason instead of producing an incomplete archive.
+
 == Screenshots ==
 
 1. Export: one button, with the advanced controls tucked away
@@ -188,6 +196,20 @@ warns you when it is.
 6. System Status: what this server can do and how the engine adapts
 
 == Changelog ==
+
+= 1.0.1 =
+* Downloads keep their exact size (Content-Length) on Apache with PHP-FPM and on servers that compress every response, so download managers no longer report "file size unknown" and can resume. Correct suffix, open and clamped ranges, 416 responses, ETag/If-Range (Chrome and Edge can resume), HEAD, and no download of an archive that is still being written.
+* Every archive gets a SHA-256 (shown after the export, on Backups, on Import and by WP-CLI, and stored as a .sha256 file) plus its exact size in bytes, so a downloaded copy can be checked with standard tools.
+* The export result and the Backups screen state whether the database is included, with the tables, rows and SQL size actually written, the files per group, anything skipped, and whether full or quick verification ran.
+* Database: a failed query can no longer end a table early (it is retried, then the export stops with the error); every table with a primary or NOT NULL unique key is paged in key order, so rows are neither skipped nor duplicated on a live site; a second installation whose prefix starts with this site's (wp_ next to wp_shop_) is no longer swept into the archive, nor dropped on import; an export without tables or core tables stops instead of succeeding; the manifest no longer lists tables that are not in the archive; BIT columns keep their values (false no longer becomes true); tables keyed on non-ASCII text in mixed character sets export completely.
+* Database: plugin tables that merely look like a site (Simple:Press's wp_sfoptions and wp_sfposts) stay with their site; MariaDB "long unique" indexes are never used for paging.
+* Import: an archive without a database never drops the destination's tables; tables of another installation in older archives are skipped; replayed batches no longer lose rows; a request killed part way through a table without a unique key no longer inserts rows twice; real duplicate rows are reported with the table name.
+* Files: symlinked uploads and plugin directories are archived with their contents; file names that are not UTF-8 and names with backslashes are kept byte for byte; a file larger than one request no longer stops the export; a file that changes while it is copied is copied again instead of archived torn; "skip core files" no longer skips wp-content from archives made with core files; bare names in Excluded directories only match top-level directories; node_modules is no longer excluded by default; links to / or into /proc, /sys, /dev and /run are reported and not followed; two links to the same outside directory are both archived; files deleted while a large directory is being scanned are neither duplicated nor mistaken for others; files the scan skips (unreadable, over the size limit) are recorded in the archive and reported by WP-CLI.
+* Import safety: protected files (wp-config.php, .htaccess, this plugin) are also recognised as ./wp-config.php or WP-CONFIG.PHP; a dangling symlink in the way of a restored file is treated as unsafe.
+* Verification and the SHA-256 are resumable inside multi-gigabyte files; no stage can stall when a request starts with its time budget already spent. The archive's checksum ledger now also covers entry types, symlink targets and permissions.
+* An incomplete archive is shown as "contents unknown" instead of with the counts the export had planned; a complete archive shows the files and tables actually written.
+* Every warning is written to the job log the moment it is raised (even thousands in one step), and the screen says how many there were.
+* Admin tables no longer make the page scroll sideways on small screens.
 
 = 1.0.0 =
 * First release.
@@ -203,6 +225,9 @@ warns you when it is.
 * WP-CLI commands and a REST API.
 
 == Upgrade Notice ==
+
+= 1.0.1 =
+Fixes downloads reported as "size unknown", adds SHA-256 checksums and shows exactly what each archive contains. Several fixes that stop tables or files from being silently left out. Recommended for everyone.
 
 = 1.0.0 =
 First release.
