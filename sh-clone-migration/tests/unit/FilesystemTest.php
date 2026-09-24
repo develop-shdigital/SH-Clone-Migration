@@ -68,8 +68,20 @@ class FilesystemTest extends TestCase {
 	public function testHarmlessPathsAreAccepted() {
 		$this->assertSame( 'wp-content/uploads/a.png', SafePath::sanitizeRelative( 'wp-content/uploads/a.png' ) );
 		$this->assertSame( 'a/b/c.txt', SafePath::sanitizeRelative( './a/b/./c.txt' ) );
-		$this->assertSame( 'a/b.txt', SafePath::sanitizeRelative( 'a\\b.txt' ) );
 		$this->assertSame( 'ünïcode ✓.png', SafePath::sanitizeRelative( 'ünïcode ✓.png' ) );
+	}
+
+	public function testBackslashIsASeparatorOnlyWhereTheSystemSaysSo() {
+		if ( '\\' === DIRECTORY_SEPARATOR ) {
+			$this->assertSame( 'a/b.txt', SafePath::sanitizeRelative( 'a\\b.txt' ) );
+			$this->assertNull( SafePath::sanitizeRelative( '..\\..\\evil.php' ) );
+			return;
+		}
+		// On Linux "images\logo.png" is one file name (Windows ZIPs extracted
+		// there produce these); it is kept, not turned into a directory.
+		$this->assertSame( 'images\\logo.png', SafePath::sanitizeRelative( 'images\\logo.png' ) );
+		// "..\..\evil.php" is then a single, harmless file name.
+		$this->assertSame( $this->dir . '/..\\..\\evil.php', SafePath::resolve( $this->dir, '..\\..\\evil.php' ) );
 	}
 
 	public function testResolveStaysInsideTheBase() {

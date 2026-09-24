@@ -152,12 +152,31 @@ class InitializeStage extends AbstractStage {
 			}
 			$name .= '-' . gmdate( 'Ymd-His' );
 		}
-		$name = sanitize_file_name( $name );
+		$name = self::safeName( $name );
+		if ( '' === $name ) {
+			$name = 'wordpress-' . gmdate( 'Ymd-His' );
+		}
 
 		// The suffix is unguessable on purpose: on a web server that ignores
 		// .htaccess the archive path is the only thing standing between an
 		// anonymous visitor and a copy of the whole site.
 		return Paths::trailingslash( $this->storage->archives() ) . $name . '-' . bin2hex( random_bytes( 8 ) ) . '.wpress';
+	}
+
+	/**
+	 * Reduce an archive name to the characters the download, delete and
+	 * verify handlers accept ([A-Za-z0-9._-]). sanitize_file_name() keeps
+	 * letters such as "@", "^" or Cyrillic, and an archive named with them
+	 * could be created but never downloaded.
+	 *
+	 * @param string $name Requested name.
+	 * @return string
+	 */
+	public static function safeName( $name ) {
+		$name = function_exists( 'remove_accents' ) ? remove_accents( (string) $name ) : (string) $name;
+		$name = preg_replace( '/[^A-Za-z0-9._-]+/', '-', $name );
+		$name = preg_replace( '/-{2,}/', '-', (string) $name );
+		return trim( (string) $name, '.-_' );
 	}
 
 	/**

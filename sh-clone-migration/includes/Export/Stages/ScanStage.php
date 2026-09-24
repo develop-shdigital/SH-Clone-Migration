@@ -96,8 +96,8 @@ class ScanStage extends AbstractStage {
 
 		if ( 'analyze' === $state['phase'] ) {
 			$this->analyze( $job );
-			$state['phase'] = 'walk';
-			$this->seedScanner( $job );
+			$state['phase']   = 'walk';
+			$state['scanner'] = $this->seedScanner( $job );
 			$job->setStageState( $this->key(), $state );
 			return $this->progress( __( 'Database analysed', 'sh-clone-migration' ), 0.35 );
 		}
@@ -105,21 +105,19 @@ class ScanStage extends AbstractStage {
 		if ( 'walk' === $state['phase'] ) {
 			$scanner = $this->scanner( $job );
 			$result  = $scanner->scan(
-				array(
-					'dir_offset' => $state['dir_offset'],
-					'totals'     => empty( $state['totals'] ) ? array(
-						'files'   => 0,
-						'bytes'   => 0,
-						'dirs'    => 0,
-						'skipped' => 0,
-						'groups'  => array(),
-					) : $state['totals'],
+				array_merge(
+					isset( $state['scanner'] ) ? (array) $state['scanner'] : array(),
+					array(
+						'dir_offset' => $state['dir_offset'],
+						'totals'     => (array) $state['totals'],
+					)
 				),
 				$budget
 			);
 
 			$state['dir_offset'] = $result['dir_offset'];
 			$state['totals']     = $result['totals'];
+			$state['scanner']    = array_diff_key( $result, array_flip( array( 'dir_offset', 'totals', 'done' ) ) );
 
 			foreach ( $scanner->warnings() as $warning ) {
 				$job->addWarning( $warning );
@@ -147,11 +145,14 @@ class ScanStage extends AbstractStage {
 
 		$this->logger->info(
 			sprintf(
-				'Scan complete: %1$d files, %2$s, %3$d directories, %4$d skipped.',
+				'Scan complete: %1$d entries, %2$s, %3$d directories walked, %4$d skipped, %5$d excluded, %6$d symlinks kept, %7$d symlinks followed.',
 				$state['totals']['files'],
 				Bytes::format( $state['totals']['bytes'] ),
 				$state['totals']['dirs'],
-				$state['totals']['skipped']
+				$state['totals']['skipped'],
+				isset( $state['totals']['excluded'] ) ? $state['totals']['excluded'] : 0,
+				isset( $state['totals']['links'] ) ? $state['totals']['links'] : 0,
+				isset( $state['totals']['followed'] ) ? $state['totals']['followed'] : 0
 			)
 		);
 
@@ -174,8 +175,9 @@ class ScanStage extends AbstractStage {
 	protected function analyze( Job $job ) {
 		global $wp_version;
 
-		$include_foreign = (bool) $job->param( 'include_foreign_tables', false );
-		$exclude_tables  = (array) $job->param( 'exclude_tables', array() );
+		$include_foreign  = (bool) $job->param( 'include_foreign_tables', false );
+		$exclude_tables   = (array) $job->param( 'exclude_tables', array() );
+		$include_database = (bool) $job->param( 'include_database', true );
 
 		$tables = $this->inspector->exportableTables(
 			array(
@@ -195,19 +197,43 @@ class ScanStage extends AbstractStage {
 			);
 		}
 
+		if ( $include_database ) {
+			$this->assertCoreTables( $table_list, $exclude_tables );
+		} else {
+			// Nothing will be dumped, so nothing may be claimed either.
+			$table_list = array();
+			$tables     = array();
+			$this->logger->warning( 'The database is not included in this export (include_database is off).' );
+		}
+
+		$job->setShared( 'database_included', $include_database );
 		$job->setShared( 'tables', $table_list );
 		$job->setShared( 'database_size', $this->inspector->totalSize( $tables ) );
 		$job->setShared( 'prefix', $this->inspector->prefix() );
 
 		$skipped = array();
-		foreach ( $this->inspector->inventory() as $name => $info ) {
-			if ( ! isset( $tables[ $name ] ) ) {
-				$skipped[] = $name;
+		if ( $include_database ) {
+			foreach ( $this->inspector->inventory() as $name => $info ) {
+				if ( ! isset( $tables[ $name ] ) ) {
+					$skipped[] = $name;
+				}
 			}
 		}
+		$job->setShared( 'tables_skipped', $skipped );
 		if ( ! empty( $skipped ) ) {
-			$job->setShared( 'tables_skipped', $skipped );
 			$this->logger->info( 'Tables not included (they belong to another installation or were excluded): ' . implode( ', ', $skipped ) );
+		}
+
+		$foreign = $include_foreign ? array() : $this->inspector->foreignInstallations();
+		if ( $include_database && ! empty( $foreign ) ) {
+			$job->addWarning(
+				sprintf(
+					/* translators: 1: table prefixes, 2: this site's prefix */
+					__( 'This database also holds another WordPress installation (table prefix %1$s). Its tables were left out; only the tables of this site (prefix %2$s) are in the archive.', 'sh-clone-migration' ),
+					implode( ', ', $foreign ),
+					$this->inspector->prefix()
+				)
+			);
 		}
 
 		$job->setShared( 'site', $this->siteInfo() );
@@ -223,6 +249,64 @@ class ScanStage extends AbstractStage {
 				Bytes::format( $job->shared( 'database_size', 0 ) )
 			)
 		);
+	}
+
+	/**
+	 * Stop before anything is written when the table list cannot be a
+	 * WordPress database: empty, or missing a core table nobody excluded.
+	 *
+	 * @param array[]  $table_list Selected tables.
+	 * @param string[] $excluded   Tables the user excluded on purpose.
+	 * @return void
+	 * @throws \RuntimeException When the database would be incomplete.
+	 */
+	protected function assertCoreTables( array $table_list, array $excluded ) {
+		$prefix = $this->inspector->prefix();
+
+		if ( empty( $table_list ) ) {
+			throw new \RuntimeException(
+				sprintf(
+					/* translators: %s: table prefix */
+					__( 'No database tables with the prefix "%s" were found, so there is nothing to export. Check $table_prefix in wp-config.php and the database user\'s permissions. The export was stopped so that no archive without a database is produced.', 'sh-clone-migration' ),
+					$prefix
+				)
+			);
+		}
+
+		$names = array();
+		foreach ( $table_list as $info ) {
+			$names[] = $this->inspector->caseInsensitiveNames() ? strtolower( $info['name'] ) : $info['name'];
+		}
+		$skipped_on_purpose = array();
+		foreach ( $excluded as $name ) {
+			$skipped_on_purpose[] = $this->inspector->caseInsensitiveNames() ? strtolower( $name ) : $name;
+		}
+
+		$missing = array();
+		foreach ( array( 'options', 'posts', 'users' ) as $core ) {
+			$name = $prefix . $core;
+			$key  = $this->inspector->caseInsensitiveNames() ? strtolower( $name ) : $name;
+			if ( in_array( $key, $names, true ) ) {
+				continue;
+			}
+			if ( in_array( $key, $skipped_on_purpose, true ) ) {
+				$this->logger->warning( sprintf( 'Core table %s was excluded on request; this archive cannot rebuild a complete site.', $name ) );
+				continue;
+			}
+			$missing[] = $name;
+		}
+
+		if ( ! empty( $missing ) ) {
+			throw new \RuntimeException(
+				sprintf(
+					/* translators: 1: table names, 2: table prefix, 3: number of tables found */
+					__( 'The core WordPress tables %1$s were not found (table prefix "%2$s", %3$d other tables found). An archive without them cannot rebuild the site, so the export was stopped.', 'sh-clone-migration' ),
+					implode( ', ', $missing ),
+					$prefix,
+					count( $table_list )
+				)
+			);
+		}
 	}
 
 	/**
@@ -352,6 +436,9 @@ class ScanStage extends AbstractStage {
 	 */
 	protected function scanner( Job $job ) {
 		$exclusions = new ExclusionMatcher( $this->exclusionPatterns( $job ) );
+		// Documented as paths relative to the WordPress root: never matched
+		// by bare name at any depth.
+		$exclusions->addAnchored( (array) $this->settings->get( 'exclude_directories', array() ) );
 
 		$scanner = new Scanner(
 			new FileQueue( $this->queuePath( $job, 'files' ) ),
@@ -360,6 +447,7 @@ class ScanStage extends AbstractStage {
 		);
 		$scanner->block( array( $this->storage->base() ) );
 		$scanner->maxFileSize( $this->settings->getInt( 'exclude_large_files', 0 ) );
+		$scanner->roots( (array) $job->shared( 'roots', array() ) );
 
 		return $scanner;
 	}
@@ -368,7 +456,7 @@ class ScanStage extends AbstractStage {
 	 * Seed the directory queue with the roots to walk.
 	 *
 	 * @param Job $job Job.
-	 * @return void
+	 * @return array Initial scanner state (the committed queue sizes).
 	 */
 	protected function seedScanner( Job $job ) {
 		$roots = Paths::roots( (bool) $job->param( 'include_core', $this->settings->getBool( 'include_core' ) ) );
@@ -382,12 +470,29 @@ class ScanStage extends AbstractStage {
 
 		$scanner = $this->scanner( $job );
 		$scanner->seed( $roots );
+		foreach ( $scanner->warnings() as $warning ) {
+			$job->addWarning( $warning );
+		}
 
-		$this->logger->info( 'Scanning roots: ' . implode( ', ', array_keys( $roots ) ) );
+		$job->setShared( 'effective_exclusions', $this->effectiveExclusions( $job ) );
+		$job->setShared( 'max_file_size', $this->settings->getInt( 'exclude_large_files', 0 ) );
+
+		$described = array();
+		foreach ( $roots as $name => $path ) {
+			$real        = Paths::real( $path );
+			$described[] = $name . ' = ' . $path . ( $real !== Paths::normalize( $path ) ? ' (-> ' . $real . ')' : '' );
+		}
+		$this->logger->info( 'Scanning roots: ' . implode( ', ', $described ) );
+
+		return array(
+			'files_size' => 0,
+			'dirs_size'  => $queue->size(),
+		);
 	}
 
 	/**
-	 * Exclusion patterns for this job.
+	 * Exclusion patterns for this job (the anchored "Excluded directories"
+	 * setting is added separately).
 	 *
 	 * @param Job $job Job.
 	 * @return string[]
@@ -399,7 +504,6 @@ class ScanStage extends AbstractStage {
 		}
 		$patterns = array_merge(
 			$patterns,
-			(array) $this->settings->get( 'exclude_directories', array() ),
 			(array) $this->settings->get( 'exclude_patterns', array() ),
 			(array) $job->param( 'exclusions', array() )
 		);
@@ -411,6 +515,23 @@ class ScanStage extends AbstractStage {
 		 * @param Job      $job      Job.
 		 */
 		return (array) apply_filters( 'shcm_export_exclusions', $patterns, $job );
+	}
+
+	/**
+	 * Every exclusion that applies to this job, for the manifest.
+	 *
+	 * @param Job $job Job.
+	 * @return string[]
+	 */
+	protected function effectiveExclusions( Job $job ) {
+		return array_values(
+			array_unique(
+				array_merge(
+					$this->exclusionPatterns( $job ),
+					(array) $this->settings->get( 'exclude_directories', array() )
+				)
+			)
+		);
 	}
 
 	/**

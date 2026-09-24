@@ -365,7 +365,17 @@ class Controller {
 				'archive_size'  => (int) $job->shared( 'archive_size', 0 ),
 				'file_totals'   => $job->shared( 'file_totals', array() ),
 				'files_progress' => $job->shared( 'files_progress', array() ),
-				'tables'        => count( (array) $job->shared( 'tables', array() ) ),
+				'tables'        => $this->reportedTables( $job ),
+				'tables_planned' => count( (array) $job->shared( 'tables', array() ) ),
+				'database'      => $job->shared( 'database_totals', null ),
+				'database_included' => $job->shared( 'database_included', null ),
+				'entry_groups'  => $job->shared( 'entry_groups', null ),
+				'files_exported' => $job->shared( 'files_exported', null ),
+				'sha256'        => (string) $job->shared( 'archive_sha256', '' ),
+				'verify_mode'   => (string) $job->shared( 'verify_mode', '' ),
+				'verified'      => (bool) $job->shared( 'verified', false ),
+				'verified_entries' => (int) $job->shared( 'verified_entries', 0 ),
+				'size_visible'  => Job::TYPE_EXPORT === $job->type() ? false !== $this->plugin->environment()->downloadDelivery()['ok'] : true,
 				'manifest'      => $job->shared( 'manifest', null ),
 				'urls'          => $job->shared( 'url_report', null ),
 				'verification'  => $job->shared( 'verification', null ),
@@ -384,6 +394,22 @@ class Controller {
 		}
 
 		return $data;
+	}
+
+	/**
+	 * Tables to report: those actually written once the database export is
+	 * over, the planned list before that.
+	 *
+	 * @param Job $job Job.
+	 * @return int
+	 */
+	protected function reportedTables( Job $job ) {
+		$totals = $job->shared( 'database_totals' );
+		$state  = $job->stageState( 'database', array() );
+		if ( is_array( $totals ) && isset( $totals['tables'] ) && isset( $state['phase'] ) && 'done' === $state['phase'] ) {
+			return (int) $totals['tables'];
+		}
+		return count( (array) $job->shared( 'tables', array() ) );
 	}
 
 	/**

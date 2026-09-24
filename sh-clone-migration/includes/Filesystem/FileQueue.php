@@ -88,6 +88,7 @@ class FileQueue {
 	 * @return int
 	 */
 	public function size() {
+		clearstatcache( true, $this->path );
 		return is_file( $this->path ) ? (int) filesize( $this->path ) : 0;
 	}
 
@@ -124,9 +125,34 @@ class FileQueue {
 		if ( '' === $this->buffer || null === $this->writer ) {
 			return;
 		}
-		fwrite( $this->writer, $this->buffer );
+		$written = fwrite( $this->writer, $this->buffer );
 		fflush( $this->writer );
+		if ( strlen( $this->buffer ) !== $written ) {
+			// A torn line would be misread later; stop here instead.
+			throw new \RuntimeException( sprintf( 'Cannot write the work queue at %s (is the disk full?)', $this->path ) );
+		}
 		$this->buffer = '';
+	}
+
+	/**
+	 * Cut the queue back to a committed size.
+	 *
+	 * @param int $size Size in bytes.
+	 * @return void
+	 */
+	public function truncate( $size ) {
+		$this->closeWriter();
+		$this->closeReader();
+		clearstatcache( true, $this->path );
+		if ( ! is_file( $this->path ) || (int) filesize( $this->path ) <= $size ) {
+			return;
+		}
+		$handle = @fopen( $this->path, 'r+b' );
+		if ( $handle ) {
+			ftruncate( $handle, max( 0, (int) $size ) );
+			fclose( $handle );
+		}
+		clearstatcache( true, $this->path );
 	}
 
 	/**
@@ -163,15 +189,24 @@ class FileQueue {
 	/**
 	 * Read the next item.
 	 *
+	 * A line without its newline is still being written (or was torn by a
+	 * crash) and is left for later rather than half read.
+	 *
 	 * @return array|null
+	 * @throws \RuntimeException When a complete line cannot be decoded.
 	 */
 	public function next() {
 		if ( null === $this->reader ) {
 			$this->openReader( 0 );
 		}
 		while ( ! feof( $this->reader ) ) {
-			$line = fgets( $this->reader );
+			$start = ftell( $this->reader );
+			$line  = fgets( $this->reader );
 			if ( false === $line ) {
+				return null;
+			}
+			if ( "\n" !== substr( $line, -1 ) ) {
+				fseek( $this->reader, $start );
 				return null;
 			}
 			$line = trim( $line );
@@ -179,9 +214,10 @@ class FileQueue {
 				continue;
 			}
 			$item = Json::decode( $line );
-			if ( null !== $item ) {
-				return $item;
+			if ( null === $item ) {
+				throw new \RuntimeException( sprintf( 'The work queue %1$s is corrupt at byte %2$d.', basename( $this->path ), $start ) );
 			}
+			return $item;
 		}
 		return null;
 	}

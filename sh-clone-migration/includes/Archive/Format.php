@@ -81,6 +81,62 @@ class Format {
 	const ENTRY_FILES     = 'files/';
 
 	/**
+	 * The ledger scheme new archives use: see ledgerItem().
+	 */
+	const LEDGER_SCHEME = 2;
+
+	/**
+	 * What the footer's chained digest covers for one entry.
+	 *
+	 * Scheme 1 (version 1.0.0) chains "path|hash", which leaves the entry's
+	 * type, link target and mode unprotected: one flipped bit could turn a
+	 * file into an empty directory and still verify. Scheme 2 chains
+	 * "path|type|target|mode|hash".
+	 *
+	 * @param int    $scheme Scheme.
+	 * @param string $path   Entry path.
+	 * @param string $type   Entry type.
+	 * @param string $target Link target.
+	 * @param int    $mode   Permission bits.
+	 * @param string $hash   Entry digest (hex).
+	 * @return string
+	 */
+	public static function ledgerItem( $scheme, $path, $type, $target, $mode, $hash ) {
+		if ( (int) $scheme < 2 ) {
+			return $path . '|' . $hash;
+		}
+		return $path . '|' . $type . '|' . $target . '|' . sprintf( '%04o', (int) $mode & 0777 ) . '|' . $hash;
+	}
+
+	/**
+	 * Archive entry path of a table dump.
+	 *
+	 * Names that are not plain [A-Za-z0-9_-] get a hash suffix, so two
+	 * tables whose names sanitise alike never share an entry.
+	 *
+	 * @param string $table Table name.
+	 * @return string
+	 */
+	public static function tableEntryPath( $table ) {
+		$safe = preg_replace( '/[^A-Za-z0-9_\-]/', '_', (string) $table );
+		if ( $safe !== $table ) {
+			$safe = ( '' === trim( $safe, '_' ) ? 'table' : $safe ) . '-' . substr( md5( (string) $table ), 0, 8 );
+		}
+		return self::ENTRY_DB_TABLES . $safe . '.sql';
+	}
+
+	/**
+	 * Entry path archives from version 1.0.0 used for a table dump.
+	 *
+	 * @param string $table Table name.
+	 * @return string
+	 */
+	public static function legacyTableEntryPath( $table ) {
+		$safe = preg_replace( '/[^A-Za-z0-9_\-]/', '_', (string) $table );
+		return self::ENTRY_DB_TABLES . ( '' === $safe ? 'table_' . md5( (string) $table ) : $safe ) . '.sql';
+	}
+
+	/**
 	 * Empty chained-hash state.
 	 *
 	 * @return string 32 raw bytes.

@@ -37,10 +37,27 @@ the handful of WordPress functions the engine touches (`is_serialized`,
 | `tests/unit/FilesystemTest.php` | Path traversal, symlink escape, exclusion globs, on-disk queue resume |
 | `tests/unit/JobsTest.php` | Stage progression, pause and resume, failure and cleanup, cancellation, weighted progress, secrets never persisted |
 | `tests/unit/SupportTest.php` | Size parsing and packing, JSON helpers, log redaction, prefix rewriting, cipher round trips, settings sanitisation |
+| `tests/unit/DeliveryTest.php` | HTTP range resolution (suffix, open, clamped, 416, multi-range, If-Range), lossless JSON for non-UTF-8 names, strict JSON encoding, resumable whole-file SHA-256, the `.sha256` checksum file |
+| `tests/unit/FileSelectionTest.php` | Symlinked uploads as a root, followed plugin links with loop protection, links containing the site, to `/` and into `/proc` refused, two links to one outside directory, a second link to a root kept as a link, files deleted between scan requests, non-UTF-8 and backslash names, content not walked twice with core included, huge directories resumed, anchored exclusions, `wp-content/` aliases for separate roots, path collapsing, queue truncation and torn lines, unique table entry names |
+| `tests/unit/IntegrityTest.php` | Archive descriptions taken from the footer only (incomplete archives claim no contents), a writer refusing to resume onto a shortened file, damaged headers, ledger scheme 2 catching a redirected symlink, the one-shot SHA-256 of older PHP and its attempt marker, every warning of a step reaching the log |
 | `tests/integration/FilePipelineTest.php` | A real directory tree scanned, archived, restored and compared byte for byte; hostile archives refused; scan resumability |
 
-The end-to-end migration test (a real WordPress site cloned onto another one)
-is described in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md).
+Some behaviour can only be tested inside WordPress against a real database.
+These run through `wp eval-file` and never touch the site they run in except
+through a scratch schema:
+
+| Script | Covers |
+|---|---|
+| `tests/db/database-engine-test.php` | Ownership in a database shared by two installations (`wp_` and `wp_shop_`) and by plugin tables that look like a site, key selection (HASH indexes excluded), composite-key paging while the table changes, nullable unique keys, float, text, BIT and non-ASCII keys, keyless tables, a read error in the middle of a table (lock wait timeout, `max_statement_time`) and resuming after it, trigger filtering. Run with `SHCM_SCRATCH_DB=<schema> wp eval-file tests/db/database-engine-test.php`. |
+| `tests/db/import-safety-test.php` | The restore side: a statement larger than the 8 MB checkpoint, a sibling installation sharing users through `CUSTOM_USER_TABLE`, an archive whose metadata lists tables it lacks, a table colliding with a sibling's name, a kill part way through a keyless table (no row twice), duplicate rows reported, active plugins captured before a kill. Run the same way. |
+| `tests/wordpress/export-harness.php` | Drives a real export one tiny request at a time (every tick starts with an expired budget) and can modify a file while it is being copied. Used by `scripts/e2e-edge.sh`. |
+
+The shell scripts in `scripts/` run the full migrations: `e2e.sh` (a realistic
+site cloned onto another one), `e2e-edge.sh` (shared databases, symlinked
+uploads and plugins, odd file names, a file modified mid-copy, thousands of
+tiny requests) and `download-test.sh` (the download endpoint the way browsers
+and download managers use it). They are described in
+[docs/TEST-RESULTS.md](docs/TEST-RESULTS.md).
 
 ## Coding standards
 
@@ -100,7 +117,20 @@ apply_filters( 'shcm_export_exclusions', $patterns, $job );
  * @param array    $params Job parameters.
  */
 apply_filters( 'shcm_job_stages', $stages, $type, $params );
+
+/**
+ * Whether the plugin may keep its download block in the site's .htaccess
+ * (keeps Content-Length on Apache with PHP-FPM and behind compression).
+ *
+ * @param bool $manage Default true.
+ */
+apply_filters( 'shcm_manage_htaccess', true );
 ```
+
+The "Excluded directories" setting is matched as anchored paths (a bare
+`cache` is the top-level `cache` only); patterns from the filter above, the
+export screen and "Excluded file patterns" keep glob semantics, where a
+pattern without a slash matches that name at any depth.
 
 ### Actions
 

@@ -18,6 +18,17 @@ defined( 'ABSPATH' ) || defined( 'SHCM_ALLOW_STANDALONE' ) || exit;
  * Directories still to visit live in a second on-disk queue rather than in the
  * job state, so the walk survives both request timeouts and pathologically
  * wide directory trees.
+ *
+ * Symlinks are resolved rather than recorded blindly. A link standing where
+ * another migration root is (a deploy-style wp-content/uploads ->
+ * shared/uploads) is skipped here because that root is walked on its own. A
+ * link whose target is inside a root is kept as a link. Any other directory
+ * link is followed and its contents archived under the link's path; every
+ * directory in a followed tree remembers the chain of links that led to it,
+ * so a link back into that chain is kept as a link instead of looping. A link
+ * that would pull in a parent of the site (/, a home directory) or a system
+ * directory (/proc, /sys, /dev) is reported and skipped. Nothing is dropped
+ * without a warning.
  */
 class Scanner {
 
@@ -57,11 +68,16 @@ class Scanner {
 	protected $max_file_size = 0;
 
 	/**
-	 * Whether to follow symlinked directories.
+	 * Migration roots: name => array( path, real ).
 	 *
-	 * @var bool
+	 * @var array[]
 	 */
-	protected $follow_symlinks = false;
+	protected $roots = array();
+
+	/**
+	 * Directory links followed so far, across the whole scan.
+	 */
+	const MAX_FOLLOWED = 10000;
 
 	/**
 	 * Warnings collected during the walk.
@@ -120,14 +136,37 @@ class Scanner {
 	}
 
 	/**
+	 * Tell the scanner which roots exist, so that a directory (or a symlink)
+	 * that is itself another root is walked only once.
+	 *
+	 * @param array<string,string> $roots Logical root name => absolute path.
+	 * @return self
+	 */
+	public function roots( array $roots ) {
+		$this->roots = array();
+		foreach ( $roots as $name => $path ) {
+			$real                 = @realpath( $path );
+			$this->roots[ $name ] = array(
+				'path' => Paths::normalize( $path ),
+				'real' => false === $real ? Paths::normalize( $path ) : Paths::normalize( $real ),
+			);
+		}
+		return $this;
+	}
+
+	/**
 	 * Seed the directory queue with the migration roots.
 	 *
 	 * @param array<string,string> $roots Logical root name => absolute path.
 	 * @return void
 	 */
 	public function seed( array $roots ) {
+		if ( empty( $this->roots ) ) {
+			$this->roots( $roots );
+		}
 		foreach ( $roots as $name => $path ) {
 			if ( ! is_dir( $path ) ) {
+				$this->warn( sprintf( 'Directory %1$s (%2$s) does not exist or is not readable, so it is not in the archive.', $path, $name ) );
 				continue;
 			}
 			$this->directories->push(
@@ -153,20 +192,50 @@ class Scanner {
 			array(
 				'dir_offset' => 0,
 				'done'       => false,
-				'totals'     => array(
-					'files'   => 0,
-					'bytes'   => 0,
-					'dirs'    => 0,
-					'skipped' => 0,
-					'groups'  => array(),
-				),
+				'totals'     => array(),
 			),
 			$state
 		);
+		$state['totals'] = array_merge(
+			array(
+				'files'    => 0,
+				'bytes'    => 0,
+				'dirs'     => 0,
+				'skipped'  => 0,
+				'excluded' => 0,
+				'links'    => 0,
+				'followed' => 0,
+				'groups'   => array(),
+			),
+			(array) $state['totals']
+		);
+
+		// A request that died mid-directory appended entries that its saved
+		// state does not know about; replaying the directory would add them
+		// a second time. Cut both queues back to what was committed.
+		if ( isset( $state['files_size'] ) ) {
+			$this->files->truncate( (int) $state['files_size'] );
+		}
+		if ( isset( $state['dirs_size'] ) ) {
+			$this->directories->truncate( (int) $state['dirs_size'] );
+		}
 
 		$this->directories->openReader( $state['dir_offset'] );
 
 		$processed = 0;
+
+		// Finish a very large directory that the previous request had to leave
+		// part way through.
+		if ( ! empty( $state['partial'] ) ) {
+			$partial = $state['partial'];
+			unset( $state['partial'] );
+			if ( ! $this->scanDirectory( $partial['item'], $state, $budget, $partial ) ) {
+				return $this->commit( $state );
+			}
+			$state['totals']['dirs']++;
+			++$processed;
+		}
+
 		while ( $budget->shouldContinue( $processed ) ) {
 			$item = $this->directories->next();
 			if ( null === $item ) {
@@ -178,18 +247,39 @@ class Scanner {
 					$state['done'] = true;
 					break;
 				}
+				if ( isset( $stalled ) && $stalled === $state['dir_offset'] ) {
+					throw new \RuntimeException( 'The directory queue ends in an incomplete line; the scan cannot continue safely.' );
+				}
+				$stalled = $state['dir_offset'];
 				$this->directories->openReader( $state['dir_offset'] );
 				continue;
 			}
+			unset( $stalled );
 
-			$this->scanDirectory( $item, $state );
+			$complete            = $this->scanDirectory( $item, $state, $budget );
 			$state['dir_offset'] = $this->directories->tell();
+			if ( ! $complete ) {
+				break;
+			}
 			$state['totals']['dirs']++;
 			++$processed;
 		}
 
+		return $this->commit( $state );
+	}
+
+	/**
+	 * Flush the queues and record the sizes this state corresponds to.
+	 *
+	 * @param array $state State.
+	 * @return array
+	 */
+	protected function commit( array $state ) {
 		$this->files->flush();
 		$this->directories->flush();
+
+		$state['files_size'] = $this->files->size();
+		$state['dirs_size']  = $this->directories->size();
 
 		return $state;
 	}
@@ -197,107 +287,85 @@ class Scanner {
 	/**
 	 * Scan a single directory, queueing its children.
 	 *
-	 * @param array $item  Directory queue item.
-	 * @param array $state State (by reference).
-	 * @return void
+	 * A directory with hundreds of thousands of entries (uploads without
+	 * year/month folders) can take longer than one request allows. When the
+	 * budget runs out part way, the rest of the listing is spooled to a file
+	 * and the next request continues from a byte offset in it, so nothing
+	 * depends on readdir() returning the same order twice (it does not when
+	 * files are added or deleted in between).
+	 *
+	 * @param array       $item    Directory queue item.
+	 * @param array       $state   State (by reference).
+	 * @param Budget|null $budget  Budget.
+	 * @param array|null  $partial Saved position inside this directory.
+	 * @return bool False when the directory was left part way through.
+	 * @throws \RuntimeException When the queue item is corrupt.
 	 */
-	protected function scanDirectory( array $item, array &$state ) {
-		$base     = $item['base'];
+	protected function scanDirectory( array $item, array &$state, $budget = null, $partial = null ) {
+		if ( ! isset( $item['base'], $item['root'] ) || ! is_string( $item['base'] ) || ! isset( $item['rel'] ) || ! is_string( $item['rel'] ) ) {
+			throw new \RuntimeException( 'The directory queue holds a corrupt entry; the scan cannot continue safely.' );
+		}
 		$relative = $item['rel'];
 		$root     = $item['root'];
-		$absolute = '' === $relative ? $base : $base . '/' . $relative;
+		$absolute = '' === $relative ? $item['base'] : $item['base'] . '/' . $relative;
+		$children = is_array( $partial ) && isset( $partial['children'] ) ? (int) $partial['children'] : 0;
+		$handled  = 0;
+		$spool    = new FileQueue( $this->files->path() . '.partial' );
 
-		$handle = @opendir( $absolute );
-		if ( ! $handle ) {
-			$this->warn( sprintf( 'Directory could not be read and was skipped: %s', $absolute ) );
-			$state['totals']['skipped']++;
-			return;
-		}
-
-		$children = 0;
-		while ( false !== ( $entry = readdir( $handle ) ) ) {
-			if ( '.' === $entry || '..' === $entry ) {
-				continue;
+		if ( is_array( $partial ) && isset( $partial['offset'] ) ) {
+			// Continue with the listing an earlier request spooled.
+			$spool->openReader( (int) $partial['offset'] );
+			while ( true ) {
+				if ( null !== $budget && $handled > 0 && 0 === $handled % 500 && $budget->expired() ) {
+					$state['partial'] = array(
+						'item'     => $item,
+						'offset'   => $spool->tell(),
+						'children' => $children,
+					);
+					$spool->closeReader();
+					return false;
+				}
+				$line = $spool->next();
+				if ( null === $line ) {
+					break;
+				}
+				++$handled;
+				$this->scanChild( $item, (string) $line['n'], $state, $children );
 			}
-
-			$child_rel = '' === $relative ? $entry : $relative . '/' . $entry;
-			$child_abs = $absolute . '/' . $entry;
-
-			if ( $this->isBlocked( $child_abs ) ) {
-				continue;
-			}
-			if ( $this->exclusions->matches( $this->exclusionPath( $root, $child_rel ) ) ) {
-				continue;
-			}
-
-			++$children;
-
-			$is_link = is_link( $child_abs );
-			if ( $is_link ) {
-				$target = @readlink( $child_abs );
-				$group  = Paths::group( $root, $child_rel );
-				$this->files->push(
-					array(
-						'root'   => $root,
-						'rel'    => $child_rel,
-						'type'   => 'l',
-						'size'   => 0,
-						'mtime'  => (int) @filemtime( $child_abs ),
-						'mode'   => 0777,
-						'target' => (string) $target,
-						'group'  => $group,
-					)
-				);
-				$state['totals']['files']++;
-				$this->countGroup( $state, $group, 0 );
-				continue;
-			}
-
-			if ( is_dir( $child_abs ) ) {
-				$this->directories->push(
-					array(
-						'root' => $root,
-						'base' => $base,
-						'rel'  => $child_rel,
-					)
-				);
-				continue;
-			}
-
-			if ( ! is_file( $child_abs ) ) {
-				continue; // Sockets, fifos and other things a website does not need.
-			}
-			if ( ! is_readable( $child_abs ) ) {
-				$this->warn( sprintf( 'File is not readable and was skipped: %s', $child_abs ) );
+			$spool->delete();
+		} else {
+			$handle = @opendir( $absolute );
+			if ( ! $handle ) {
+				$this->warn( sprintf( 'Directory could not be read and was skipped: %s', $absolute ) );
 				$state['totals']['skipped']++;
-				continue;
+				return true;
 			}
-
-			$size = (int) @filesize( $child_abs );
-			if ( $this->max_file_size > 0 && $size > $this->max_file_size ) {
-				$this->warn( sprintf( 'File exceeds the configured size limit and was skipped: %s', $child_abs ) );
-				$state['totals']['skipped']++;
-				continue;
+			while ( false !== ( $entry = readdir( $handle ) ) ) {
+				if ( '.' === $entry || '..' === $entry ) {
+					continue;
+				}
+				if ( null !== $budget && $handled > 0 && 0 === $handled % 500 && $budget->expired() ) {
+					$spool->delete();
+					$spool->push( array( 'n' => $entry ) );
+					while ( false !== ( $rest = readdir( $handle ) ) ) {
+						if ( '.' !== $rest && '..' !== $rest ) {
+							$spool->push( array( 'n' => $rest ) );
+						}
+					}
+					$spool->closeWriter();
+					closedir( $handle );
+					$state['partial'] = array(
+						'item'     => $item,
+						'offset'   => 0,
+						'children' => $children,
+					);
+					return false;
+				}
+				++$handled;
+				$this->scanChild( $item, $entry, $state, $children );
 			}
-
-			$group = Paths::group( $root, $child_rel );
-			$this->files->push(
-				array(
-					'root'  => $root,
-					'rel'   => $child_rel,
-					'type'  => 'f',
-					'size'  => $size,
-					'mtime' => (int) @filemtime( $child_abs ),
-					'mode'  => (int) @fileperms( $child_abs ),
-					'group' => $group,
-				)
-			);
-
-			$state['totals']['files']++;
-			$state['totals']['bytes'] += $size;
-			$this->countGroup( $state, $group, $size );
+			closedir( $handle );
 		}
-		closedir( $handle );
 
 		// Preserve empty directories so the restored tree matches the source.
 		if ( 0 === $children && '' !== $relative ) {
@@ -316,6 +384,298 @@ class Scanner {
 			$state['totals']['files']++;
 			$this->countGroup( $state, $group, 0 );
 		}
+		return true;
+	}
+
+	/**
+	 * Handle one directory entry.
+	 *
+	 * @param array  $item     The directory's queue item.
+	 * @param string $entry    Entry name.
+	 * @param array  $state    State (by reference).
+	 * @param int    $children Entries counted in this directory (by reference).
+	 * @return void
+	 */
+	protected function scanChild( array $item, $entry, array &$state, &$children ) {
+		$relative  = $item['rel'];
+		$root      = $item['root'];
+		$base      = $item['base'];
+		$absolute  = '' === $relative ? $base : $base . '/' . $relative;
+		$child_rel = '' === $relative ? $entry : $relative . '/' . $entry;
+		$child_abs = $absolute . '/' . $entry;
+
+		if ( $this->isBlocked( $child_abs ) ) {
+			return;
+		}
+		if ( $this->exclusions->matchesAny( $this->exclusionPaths( $root, $child_rel ) ) ) {
+			$state['totals']['excluded']++;
+			return;
+		}
+
+		// Another root lives here (wp-content inside a core walk, uploads
+		// inside wp-content when uploads is its own root): walked separately.
+		if ( null !== $this->otherRootAt( $child_abs, $root ) ) {
+			++$children;
+			return;
+		}
+
+		++$children;
+
+		if ( is_link( $child_abs ) ) {
+			$this->handleLink( $item, $child_rel, $child_abs, $state );
+			return;
+		}
+
+		if ( is_dir( $child_abs ) ) {
+			$child = array(
+				'root' => $root,
+				'base' => $base,
+				'rel'  => $child_rel,
+			);
+			if ( ! empty( $item['chain'] ) ) {
+				$child['chain'] = $item['chain'];
+			}
+			$this->directories->push( $child );
+			return;
+		}
+
+		$this->queueFile( $root, $child_rel, $child_abs, $state );
+	}
+
+	/**
+	 * Queue a regular file (or the target of a followed file link).
+	 *
+	 * @param string $root      Logical root.
+	 * @param string $child_rel Path relative to the root.
+	 * @param string $child_abs Absolute path.
+	 * @param array  $state     State (by reference).
+	 * @return void
+	 */
+	protected function queueFile( $root, $child_rel, $child_abs, array &$state ) {
+		if ( ! is_file( $child_abs ) ) {
+			return; // Sockets, fifos and other things a website does not need.
+		}
+		if ( ! is_readable( $child_abs ) ) {
+			$this->warn( sprintf( 'File is not readable and was skipped: %s', $child_abs ) );
+			$state['totals']['skipped']++;
+			return;
+		}
+
+		$size = (int) @filesize( $child_abs );
+		if ( $this->max_file_size > 0 && $size > $this->max_file_size ) {
+			$this->warn( sprintf( 'File exceeds the configured size limit and was skipped: %s', $child_abs ) );
+			$state['totals']['skipped']++;
+			return;
+		}
+
+		$group = Paths::group( $root, $child_rel );
+		$this->files->push(
+			array(
+				'root'  => $root,
+				'rel'   => $child_rel,
+				'type'  => 'f',
+				'size'  => $size,
+				'mtime' => (int) @filemtime( $child_abs ),
+				'mode'  => (int) @fileperms( $child_abs ),
+				'group' => $group,
+			)
+		);
+
+		$state['totals']['files']++;
+		$state['totals']['bytes'] += $size;
+		$this->countGroup( $state, $group, $size );
+	}
+
+	/**
+	 * Decide what to do with a symlink.
+	 *
+	 * @param array  $item      The containing directory's queue item.
+	 * @param string $child_rel Path relative to the root.
+	 * @param string $child_abs Absolute path of the link.
+	 * @param array  $state     State (by reference).
+	 * @return void
+	 */
+	protected function handleLink( array $item, $child_rel, $child_abs, array &$state ) {
+		$root   = $item['root'];
+		$chain  = isset( $item['chain'] ) ? (array) $item['chain'] : array();
+		$target = (string) @readlink( $child_abs );
+		$real   = @realpath( $child_abs );
+
+		// Dangling, or a target we may not resolve: keep the link itself.
+		if ( false === $real ) {
+			$this->recordLink( $root, $child_rel, $child_abs, $target, $state );
+			return;
+		}
+		$real = Paths::normalize( $real );
+
+		if ( $this->isSystemPath( $real ) ) {
+			$this->warn( sprintf( 'Symlink %1$s points at %2$s, a system directory; it was not followed and its contents are not in the archive.', $child_abs, $real ) );
+			$state['totals']['skipped']++;
+			return;
+		}
+
+		// Inside something that is archived anyway: a link reproduces it.
+		if ( $this->insideRoot( $real ) ) {
+			$this->recordLink( $root, $child_rel, $child_abs, $target, $state );
+			return;
+		}
+
+		if ( ! is_dir( $real ) ) {
+			// A file link to something outside the site: archive the content.
+			$state['totals']['followed']++;
+			$this->queueFile( $root, $child_rel, $child_abs, $state );
+			return;
+		}
+
+		if ( $this->containsRoot( $real ) ) {
+			// Following would pull in the site itself, or everything above it.
+			$this->warn( sprintf( 'Symlink %1$s points at %2$s, a directory that contains the site itself; it was not followed and its contents are not in the archive.', $child_abs, $real ) );
+			$state['totals']['skipped']++;
+			return;
+		}
+
+		// A link back to a directory this branch is already inside of (or
+		// above it) would loop: keep it as a link.
+		foreach ( $chain as $seen ) {
+			if ( Paths::isInside( $seen, $real ) ) {
+				$this->recordLink( $root, $child_rel, $child_abs, $target, $state );
+				return;
+			}
+		}
+
+		if ( ! is_readable( $real ) ) {
+			$this->warn( sprintf( 'Symlinked directory %1$s -> %2$s is not readable and was skipped.', $child_abs, $real ) );
+			$state['totals']['skipped']++;
+			return;
+		}
+		if ( (int) $state['totals']['followed'] >= self::MAX_FOLLOWED ) {
+			$this->warn( sprintf( 'Symlink %1$s -> %2$s was kept as a link: more than %3$d symlinked directories were followed already.', $child_abs, $real, self::MAX_FOLLOWED ) );
+			$this->recordLink( $root, $child_rel, $child_abs, $target, $state );
+			return;
+		}
+
+		// Archive the contents as ordinary files under the link's path.
+		$state['totals']['followed']++;
+		$chain[] = $real;
+		$this->directories->push(
+			array(
+				'root'  => $root,
+				'base'  => $item['base'],
+				'rel'   => $child_rel,
+				'chain' => $chain,
+			)
+		);
+	}
+
+	/**
+	 * Queue a symlink entry.
+	 *
+	 * @param string $root      Logical root.
+	 * @param string $child_rel Path relative to the root.
+	 * @param string $child_abs Absolute path of the link.
+	 * @param string $target    Link target as stored in the link.
+	 * @param array  $state     State (by reference).
+	 * @return void
+	 */
+	protected function recordLink( $root, $child_rel, $child_abs, $target, array &$state ) {
+		$group = Paths::group( $root, $child_rel );
+		$this->files->push(
+			array(
+				'root'   => $root,
+				'rel'    => $child_rel,
+				'type'   => 'l',
+				'size'   => 0,
+				'mtime'  => (int) @filemtime( $child_abs ),
+				'mode'   => 0777,
+				'target' => $target,
+				'group'  => $group,
+			)
+		);
+		$state['totals']['files']++;
+		$state['totals']['links']++;
+		$this->countGroup( $state, $group, 0 );
+	}
+
+	/**
+	 * Name of a root (other than $current) that stands at an absolute path:
+	 * the same path, or the same real directory reached without a link. A
+	 * link elsewhere that merely resolves to a root (wp-content/blogs.dir ->
+	 * uploads) is not the root and is handled as a link.
+	 *
+	 * @param string $absolute Absolute path.
+	 * @param string $current  Root being walked.
+	 * @return string|null
+	 */
+	protected function otherRootAt( $absolute, $current ) {
+		if ( empty( $this->roots ) ) {
+			return null;
+		}
+		$path = Paths::normalize( $absolute );
+		$real = null;
+		foreach ( $this->roots as $name => $root ) {
+			if ( $name === $current ) {
+				continue;
+			}
+			if ( $path === $root['path'] ) {
+				return $name;
+			}
+			if ( null === $real ) {
+				$real = '';
+				if ( ! is_link( $absolute ) && is_dir( $absolute ) ) {
+					$resolved = @realpath( $absolute );
+					$real     = false === $resolved ? '' : Paths::normalize( $resolved );
+				}
+			}
+			if ( '' !== $real && $real === $root['real'] ) {
+				return $name;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Whether a real path lies inside a root.
+	 *
+	 * @param string $real Real path.
+	 * @return bool
+	 */
+	protected function insideRoot( $real ) {
+		foreach ( $this->roots as $root ) {
+			if ( Paths::isInside( $real, $root['real'] ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a real path contains a root.
+	 *
+	 * @param string $real Real path.
+	 * @return bool
+	 */
+	protected function containsRoot( $real ) {
+		foreach ( $this->roots as $root ) {
+			if ( Paths::isInside( $root['real'], $real ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Pseudo filesystems no website keeps content in.
+	 *
+	 * @param string $real Real path.
+	 * @return bool
+	 */
+	protected function isSystemPath( $real ) {
+		foreach ( array( '/proc', '/sys', '/dev', '/run' ) as $system ) {
+			if ( Paths::isInside( $real, $system ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -345,24 +705,29 @@ class Scanner {
 	}
 
 	/**
-	 * Path used for exclusion matching.
+	 * Paths used for exclusion matching.
 	 *
-	 * Content-relative paths are matched with their wp-content/ prefix so that
-	 * the familiar "wp-content/cache" style patterns work regardless of where
-	 * the content directory physically lives.
+	 * Patterns are written relative to the WordPress root ("wp-content/cache"),
+	 * whatever the physical layout. A separate uploads, plugins or mu-plugins
+	 * root is therefore matched under its wp-content alias as well as under
+	 * its own name, so "wp-content/uploads/backups" works either way.
 	 *
 	 * @param string $root     Logical root.
 	 * @param string $relative Relative path.
-	 * @return string
+	 * @return string[]
 	 */
-	protected function exclusionPath( $root, $relative ) {
-		if ( Paths::ROOT_CONTENT === $root ) {
-			return 'wp-content/' . $relative;
+	protected function exclusionPaths( $root, $relative ) {
+		switch ( $root ) {
+			case Paths::ROOT_CONTENT:
+				return array( 'wp-content/' . $relative );
+			case Paths::ROOT_CORE:
+				return array( $relative );
+			case Paths::ROOT_PLUGINS:
+			case Paths::ROOT_MU_PLUGINS:
+			case Paths::ROOT_UPLOADS:
+				return array( 'wp-content/' . $root . '/' . $relative, $root . '/' . $relative );
 		}
-		if ( Paths::ROOT_CORE === $root ) {
-			return $relative;
-		}
-		return $root . '/' . $relative;
+		return array( $root . '/' . $relative );
 	}
 
 	/**
@@ -382,14 +747,16 @@ class Scanner {
 	}
 
 	/**
-	 * Record a warning, keeping the list bounded.
+	 * Record a warning.
+	 *
+	 * Not capped: every skipped path has to reach the job log, which is the
+	 * only place that names it. The list lives for one scan call, so it is
+	 * bounded by the time budget of a single request.
 	 *
 	 * @param string $message Message.
 	 * @return void
 	 */
 	protected function warn( $message ) {
-		if ( count( $this->warnings ) < 200 ) {
-			$this->warnings[] = $message;
-		}
+		$this->warnings[] = $message;
 	}
 }

@@ -10,7 +10,7 @@
  */
 
 define( 'SHCM_ALLOW_STANDALONE', true );
-define( 'SHCM_VERSION', '1.0.0' );
+define( 'SHCM_VERSION', '1.0.1' );
 define( 'SHCM_TESTS_DIR', __DIR__ );
 
 require_once dirname( __DIR__ ) . '/includes/bootstrap.php';

@@ -128,10 +128,22 @@ h(i) = sha256( h(i-1) ‖ raw_block_i )
 ```
 
 The state is 32 bytes, which means it can be persisted in the job state and
-carried across requests. A plain `sha256(file)` cannot: PHP's hashing context
-is not serializable, so a digest over a multi-request entry would be
-impossible. The chain is verified the same way it is produced, over the blocks
-as stored.
+carried across requests on every PHP version the plugin supports (PHP 7.4
+cannot serialise a hashing context, so a plain digest over a multi-request
+entry would be impossible there). The chain is verified the same way it is
+produced, over the blocks as stored.
+
+**Whole-file SHA-256.** In addition, once an archive is finished and verified,
+its plain SHA-256 is computed — the number `sha256sum`, `shasum -a 256` and
+PowerShell's `Get-FileHash` print — so a downloaded copy can be checked with
+standard tools. It is computed in 8 MB slices across as many requests as it
+takes, carrying the serialised hash context between them (PHP 8+; on older
+PHP the file is hashed in one call, attempted at most twice). It is stored
+next to the archive as `<archive>.wpress.sha256` in `sha256sum` format, sent
+as the `X-SHCM-SHA256` download header, and shown on the export result, the
+Backups screen, the import screen and by `wp shcm export`/`wp shcm list`.
+Chunked uploads build the same digest chunk by chunk, so the destination can
+show the SHA-256 of what it received.
 
 **Compression.** Blocks are deflated when that helps. Already-compressed file
 types (JPEG, MP4, ZIP, WOFF, PDF…) are detected by extension and stored raw,
@@ -141,29 +153,112 @@ and any block that does not shrink is stored raw regardless.
 compression with XChaCha20-Poly1305 (libsodium) or AES-256-GCM (OpenSSL). The
 key comes from Argon2id or PBKDF2-HMAC-SHA256 with a random salt stored in the
 prologue, along with an authentication token that lets a wrong password be
-rejected immediately instead of producing garbage. The manifest entry stays
-readable so the import screen can describe an archive before you type the
-password.
+rejected immediately instead of producing garbage. Every entry is encrypted,
+the manifest included. Only the footer stays readable without the password,
+and it records what was actually written — entry counts per group, whether
+the database is included, its table/row/SQL totals — so an encrypted archive
+can still be described before the password is typed.
 
 ## Exporting
 
 **Scan.** A breadth-first walk writes every file it finds into an on-disk
 queue (newline-delimited JSON). Directories still to visit go into a second
-queue. Neither list is ever held in memory, and the walk's entire position is
-one byte offset — which is what makes a scan of a million files resumable.
-Exact totals come out of the scan, so every later progress bar is real.
+queue. Neither list is ever held in memory, and the walk's position is a byte
+offset — which is what makes a scan of a million files resumable. A directory
+with hundreds of thousands of entries is listed once: when the request's time
+runs out part way through it, the names not yet handled are spooled to a file
+and the next request carries on from there, so a file deleted in between is
+simply not found (never skipped in someone else's place) and none is queued
+twice. Both queues are cut back to their committed sizes at the start of every
+request, so a request killed in the middle of a directory cannot leave
+duplicates, and a line is never read before its newline has been written.
+Exact totals come out of the scan, so every later progress bar is real. What
+the scan passes over — an unreadable file or directory, a file above the size
+limit — is counted, named in a warning, and recorded in the archive's footer
+together with what the copy had to skip.
 
-**Database.** Tables are discovered from `information_schema` (with a
-`SHOW FULL TABLES` fallback for hosts that restrict it) and classified. Tables
-that belong to a *different* WordPress installation sharing the schema are
-detected by finding other `*options` tables and are excluded by default.
+The roots are resolved physically. `wp-content` is always a root of its own
+(also when the core files are included, so an import can restore content while
+skipping core), and a plugins, mu-plugins or uploads directory that does not
+physically live inside `wp-content` — a deploy-style symlink such as
+`wp-content/uploads -> ../../shared/uploads` — is walked as a root in its own
+right. Other symlinks are resolved rather than copied blindly. A link that is
+itself a root's path is left to that root's walk. A link whose target is
+already inside a walked tree — including a second name for a root, such as
+`blogs.dir -> uploads` — is kept as a link, so nothing is archived twice. A
+dangling link is kept as a link. A file link to something outside the site
+archives that file's content. Any other directory link is followed and
+archived as ordinary files under the link's path; loops are recognised along
+each followed branch, so two links to the same outside library are both
+archived while a link back up the branch is kept as a link. A link that would
+pull in a parent of the site (`/`, a home directory) or a system directory
+(`/proc`, `/sys`, `/dev`, `/run`) is reported and skipped, and at most 10,000
+directory links are followed. File names are arbitrary bytes on disk;
+names that are not UTF-8 (Latin-1 from old FTP clients, CP437 from Windows
+ZIPs) are carried losslessly through the queues and archive headers as tagged
+base64, and a backslash is kept as an ordinary character.
+
+"Excluded directories" are anchored paths relative to the WordPress root —
+`cache` there means the top-level `cache` only, never every `cache` directory
+inside every plugin — and patterns for a separate uploads/plugins root also
+match under their `wp-content/…` spelling. Every exclusion that applied is
+recorded in the manifest.
+
+**Database.** Tables are discovered from `information_schema` of the schema
+the connection actually uses (`SELECT DATABASE()`), with a `SHOW FULL TABLES`
+fallback for hosts that restrict it; if both fail the export stops instead of
+continuing without a database. Tables are then classified. A WordPress
+installation is a prefix for which every table a site always has exists
+(`options`, `posts`, `postmeta`, `comments`, `terms`, `term_taxonomy`,
+`term_relationships`), with or without a users table of its own (sites can
+share one through `CUSTOM_USER_TABLE`); on a multisite network the numbered
+sites (`wp_2_`, …) are part of this installation. Every table belongs to the
+*longest* installation prefix it starts with,
+so a site on `wp_shop_` never claims the tables of a site on `wp_` and vice
+versa, while plugin tables that only look like a site (`wp_foo_options`, or
+the Simple:Press forum's `wp_sfoptions` and `wp_sfposts`) stay with theirs.
+Table names are compared case-insensitively when `lower_case_table_names` is
+not 0 (Windows, Azure). Tables of another installation are excluded by default
+and reported. The export refuses to start when no tables were found, or when
+`{prefix}options`, `{prefix}posts` or `{prefix}users` is missing without
+having been excluded on purpose.
 
 Each table is dumped into its own archive entry: `SHOW CREATE TABLE`, then
 rows in adaptive batches. Batch size is derived from the table's average row
 length so one batch stays around 4 MB regardless of whether rows are 200 bytes
-or 2 MB. Where a table has a single numeric key the walk is keyset paginated
-(`WHERE id > ?`) instead of `OFFSET`, which keeps the last page as fast as the
-first on a ten-million-row table.
+or 2 MB. Every table with a primary key, or a unique key over NOT NULL columns,
+is walked in key order with keyset pagination — `WHERE (k1, k2) > (…)`, written
+out so older MySQL can use the index — which keeps the last page as fast as
+the first and means a row written or deleted elsewhere on a live site cannot
+shift other rows out of the dump or duplicate them. The composite key of
+`wp_term_relationships` is the everyday case. Key values travel into the next
+query as SQL literals, so the dump reads through the connection itself rather
+than `wpdb::query()`, which rejects a query whose text does not fit the
+narrowest character set among a table's columns. Only a table without such a key
+falls back to `OFFSET`, ordered by all of its columns so consecutive pages
+see one fixed order. (MySQL sorts long TEXT/BLOB values on their first
+`max_sort_length` bytes, so two keyless rows that are equal up to that point
+have no guaranteed order between them; that is the one remaining case in
+which a row of a keyless table could be read twice or missed. Giving such a
+table a primary key removes it.) Float, ENUM, SET, BIT, TEXT and BLOB keys,
+and MariaDB's "long unique" HASH indexes, are never keyset-paged, because
+their comparison and sort orders can disagree. BIT values are written as
+numbers (mysqlnd returns them as decimal text, and writing that text as hex
+would turn every `b'0'` into 1).
+
+`wpdb::get_results()` returns an empty array — not `null` — when a query fails,
+so every read the dump depends on checks `last_error` explicitly. A failed
+batch (a lock wait timeout, a host's statement time limit, a dropped
+connection) never ends a table early: the rows read so far stay in the archive
+with the cursor on the last one written, and the same table is retried from
+there in the next request, up to five times with a growing pause, before the
+export stops with the table name and the database error. The pause between
+attempts is spent waiting inside the request when it has time for it, and
+otherwise ends the request, instead of calling the stage in a tight loop. A
+table dropped after the scan is skipped with a warning. When the tables are done, every
+planned table must have an entry, or the export stops. The rows and SQL bytes
+actually written per table are counted, logged, recorded in the footer and
+shown to the user; triggers are recorded only for exported tables.
 
 Values are escaped through the connection, not through `wpdb::_real_escape()`
 — that helper appends WordPress's internal placeholder token, which
@@ -174,17 +269,83 @@ archive instead of `%postname%`. Binary columns are emitted as hex literals.
 **Files.** The queue is consumed and each file is streamed into the archive.
 A file larger than the remaining budget simply stays open across requests: the
 job records the source offset and the writer's block position, and the next
-request seeks and continues.
+request seeks and continues; no other entry is begun while one is open. On
+every resume the file's size and mtime are compared with the values recorded
+when its copy started, and once more at the end. A file that changed, shrank
+or became unreadable is not archived as a torn copy (which would still pass
+verification, because the checksum covers exactly what was written): the
+partial entry is discarded — the archive is truncated back to the entry's
+header — and the file copied again from the start, or skipped with a warning
+after two attempts. Every skip is a warning, and every warning is written to
+the job's log the moment it is raised: the job file keeps only the newest 500
+for the screen, but the downloadable log names every one. The number of
+entries archived plus skipped is compared with the scan.
 
 **Verify.** The finished archive is read back and every checksum recomputed,
-plus a chained digest over all entry digests compared against the footer.
+plus a chained digest over all entries compared against the footer. The
+ledger item of each entry covers its path, type, link target, permissions and
+checksum (`checksum_scheme` 2 in the footer; archives from 1.0.0 covered path
+and checksum only), so a redirected symlink — which has no payload to
+checksum — is caught too. Directory and link headers must have no payload,
+and only a link may carry a target; anything else is reported as a damaged
+header.
+Verification also resumes inside a large entry, so a multi-gigabyte file does
+not have to be checked within one request. The whole-file SHA-256 follows.
 Only then is the download offered.
+
+**Download.** The download handler refuses an archive without a footer (still
+being written, or from a failed export) with HTTP 409, and otherwise sends it
+with an exact `Content-Length`, `Accept-Ranges`, a strong `ETag`,
+`Last-Modified`, correct single-range, suffix, open and clamped ranges, 416
+with `Content-Range: bytes */size`, `If-Range`, `HEAD`, and the
+`X-SHCM-SHA256` header. It never buffers the body and stops reading when the
+client disconnects. Web servers can still take `Content-Length` away: Apache
+with PHP-FPM drops it from every FastCGI response since 2.4.59 (the
+CVE-2024-24795 fix) unless the request carries `ap_trust_cgilike_cl`, and
+servers that compress every response replace it with chunked encoding unless
+`no-gzip` is set. Under mod_php the handler sets `no-gzip` itself; for
+PHP-FPM, the plugin keeps a small marked block in the `.htaccess` files that
+govern `wp-admin` (the site root's, and WordPress's own directory's when it
+has rewrite rules of its own) that sets both variables for the download
+actions only. It is written only into a file that already carries rewrite
+rules, retried from wp-admin until it is in place (the attempt made on
+activation may run under WP-CLI), refreshed when the rule changes, and removed
+on deactivation. Whether downloads really keep their size is then measured,
+not assumed: a loopback request downloads a small, very compressible probe
+file through the same `admin-post.php` path and checks `Content-Length` and
+`Content-Encoding`. System Status shows the result and, when the size is
+lost, the fix that fits the server — the `.htaccess` lines when the plugin
+could not write them, or a one-line `SetEnvIfExpr` for the server
+configuration when `.htaccess` rules are not applied (`AllowOverride None`,
+PHP proxied with `ProxyPassMatch`) or not used by the site at all.
 
 ## Importing
 
 **Validate before touching anything.** The whole archive is verified before
 the first destructive operation. A corrupt archive fails with the destination
-untouched.
+untouched. So does an archive whose database has no `{prefix}options` table.
+An archive without a database (exported with the database switched off) never
+drops anything: the destination database is left as it is, and the URL
+replacement and plugin/theme restoration that only make sense after a
+database restore are skipped.
+
+**Only this site's tables are replaced.** Replace mode drops the tables that
+belong to this installation by the same longest-prefix rule as the export —
+never every table whose name merely starts with the prefix, so a second
+installation on `wpdst_shop_` next to this site's `wpdst_` survives. Archives
+made by version 1.0.0 could contain a sibling installation's tables; those are
+skipped when they would land on one of this site's restored tables after the
+prefix rewrite, or belong to another installation at the destination.
+
+A request that is killed part way through a table leaves a marker file
+behind. The next request finds it, sees that the job state still points at
+the position the killed request started from, and restores that table again
+from the start of its dump — which begins with `DROP TABLE` and `CREATE
+TABLE`, so this is idempotent and a table without a unique key cannot receive
+rows twice. A multi-row `INSERT` that still meets existing rows is re-run as
+`INSERT IGNORE`, which keeps the rows that are there and adds the ones that
+are not, and the number of rows that were really duplicates is reported as a
+warning naming the table.
 
 **The prefix belongs to the destination.** The destination keeps its own
 `wp-config.php`, so its `$table_prefix` wins and every statement is rewritten
@@ -207,8 +368,18 @@ exists on disk.
 **Every path is validated.** Absolute paths, `..`, drive letters, stream
 wrappers, null bytes and control characters are rejected outright, and the
 resolved destination is proven to be inside the target directory even when a
-symlink is in the way. Each entry's checksum is verified as it is written, so
-corruption is caught during the restore, not after it.
+symlink is in the way: the deepest part of the path that exists (a link
+counts, even a dangling one) is resolved through every link in it and must
+stay inside, and a dangling link counts as unsafe. Protected files (`wp-config.php`,
+`.htaccess`, this plugin and its storage) are matched after the path has been
+normalised and case-insensitively, so `./wp-config.php` or `WP-CONFIG.PHP`
+does not slip past. A backslash is a separator only on Windows; elsewhere
+it is an ordinary character in a file name. Symlink targets are collapsed
+(`.` and `..` resolved) before the check that they stay inside the
+installation. Content stored under the core root by version 1.0.0 archives is
+restored into the destination's content directory, and "skip core files" skips
+only core. Each entry's checksum is verified as it is written, so corruption
+is caught during the restore, not after it.
 
 **Maintenance mode and the endpoint.** A restore turns on WordPress
 maintenance mode — which blocks `admin-ajax.php` as well as the front end.

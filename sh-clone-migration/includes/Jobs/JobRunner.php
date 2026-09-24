@@ -78,6 +78,17 @@ class JobRunner {
 
 		$this->logger->channel( $job->id() );
 
+		// Every warning goes to the job log the moment it is raised. The job
+		// file keeps only the newest 500, so a step that skips thousands of
+		// files still leaves each name in the downloadable log.
+		$logger = $this->logger;
+		$job_id = $job->id();
+		$job->onWarning(
+			function ( $message ) use ( $logger, $job_id ) {
+				$logger->channel( $job_id )->warning( $message );
+			}
+		);
+
 		if ( null === $budget ) {
 			$budget = Budget::create(
 				$this->settings->getInt( 'time_budget' ),
@@ -150,7 +161,9 @@ class JobRunner {
 
 			$this->store->save( $job );
 
-			if ( $budget->expired() ) {
+			// A stage that is only waiting (a retry backoff) asks to end the
+			// request rather than be called again at once.
+			if ( $budget->expired() || ! empty( $data['yield'] ) ) {
 				$job->set( 'status', Job::STATUS_PAUSED );
 				$job->set( 'message', $job->get( 'message' ) );
 				$this->store->save( $job );

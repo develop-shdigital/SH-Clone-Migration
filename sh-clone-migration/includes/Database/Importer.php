@@ -196,6 +196,31 @@ class Importer {
 	}
 
 	/**
+	 * Rows a multi-row INSERT IGNORE skipped as duplicates, from the
+	 * server's "Records: N  Duplicates: D" summary of the last statement.
+	 *
+	 * @return int|null Null when the server gave no summary.
+	 */
+	public function lastDuplicates() {
+		$dbh = isset( $this->db->dbh ) ? $this->db->dbh : null;
+		if ( ! $dbh instanceof \mysqli ) {
+			return null;
+		}
+		$info = (string) mysqli_info( $dbh );
+		return preg_match( '/Duplicates:\s*(\d+)/', $info, $matches ) ? (int) $matches[1] : null;
+	}
+
+	/**
+	 * Table a statement writes to, for messages.
+	 *
+	 * @param string $sql Statement.
+	 * @return string
+	 */
+	public function targetOf( $sql ) {
+		return $this->statementTarget( $sql );
+	}
+
+	/**
 	 * Run a query on the raw connection when possible.
 	 *
 	 * @param string $sql Statement.
@@ -273,14 +298,14 @@ class Importer {
 	}
 
 	/**
-	 * Drop every table with a given prefix (used by the replace import mode).
+	 * Drop every table with a given prefix.
 	 *
 	 * @param string   $prefix Prefix.
 	 * @param string[] $keep   Table names to keep.
 	 * @return int Number of tables dropped.
 	 */
 	public function dropTablesWithPrefix( $prefix, array $keep = array() ) {
-		$schema = defined( 'DB_NAME' ) ? DB_NAME : (string) $this->db->get_var( 'SELECT DATABASE()' );
+		$schema = (string) $this->db->get_var( 'SELECT DATABASE()' );
 		$tables = $this->db->get_results(
 			$this->db->prepare(
 				'SELECT TABLE_NAME AS name, TABLE_TYPE AS table_type FROM information_schema.TABLES
@@ -290,8 +315,23 @@ class Importer {
 			),
 			ARRAY_A
 		);
+		$rows = array();
+		foreach ( is_array( $tables ) ? $tables : array() as $row ) {
+			if ( ! in_array( $row['name'], $keep, true ) ) {
+				$rows[] = $row;
+			}
+		}
+		return $this->dropTables( $rows );
+	}
+
+	/**
+	 * Drop the given tables and views (used by the replace import mode).
+	 *
+	 * @param array[] $tables Each: name, table_type (VIEW or BASE TABLE).
+	 * @return int Number of tables dropped.
+	 */
+	public function dropTables( array $tables ) {
 		$dropped = 0;
-		$tables  = is_array( $tables ) ? $tables : array();
 		$this->prepareSession();
 
 		// Views must be dropped before the tables they read from.
@@ -305,11 +345,7 @@ class Importer {
 		);
 
 		foreach ( $tables as $row ) {
-			$table = $row['name'];
-			if ( in_array( $table, $keep, true ) ) {
-				continue;
-			}
-			$quoted = '`' . str_replace( '`', '``', $table ) . '`';
+			$quoted = '`' . str_replace( '`', '``', $row['name'] ) . '`';
 			if ( 'VIEW' === strtoupper( (string) $row['table_type'] ) ) {
 				$this->rawQuery( 'DROP VIEW IF EXISTS ' . $quoted );
 			} else {

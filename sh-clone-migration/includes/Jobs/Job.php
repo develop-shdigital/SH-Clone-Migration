@@ -44,6 +44,14 @@ class Job {
 	protected $runtime = array();
 
 	/**
+	 * Receives every warning as it is added (the job log), so the log names
+	 * all of them even though the job file keeps only the newest 500.
+	 *
+	 * @var callable|null
+	 */
+	protected $warning_sink = null;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param array $data Job data.
@@ -72,6 +80,7 @@ class Job {
 			'totals'        => array(),
 			'error'         => null,
 			'warnings'      => array(),
+			'warnings_total' => 0,
 			'created_at'    => 0,
 			'updated_at'    => 0,
 			'started_at'    => 0,
@@ -241,16 +250,34 @@ class Job {
 	}
 
 	/**
+	 * Set (or clear) the callback that receives each warning as it is added.
+	 *
+	 * @param callable|null $sink Callback taking the message.
+	 * @return self
+	 */
+	public function onWarning( $sink ) {
+		$this->warning_sink = is_callable( $sink ) ? $sink : null;
+		return $this;
+	}
+
+	/**
 	 * Record a non fatal warning.
 	 *
 	 * @param string $message Message.
 	 * @return self
 	 */
 	public function addWarning( $message ) {
+		// A path with odd bytes in it must still display (and encode).
+		$message = \SHCM\Support\Json::printable( (string) $message );
+
 		$this->data['warnings'][] = array(
 			'time'    => time(),
-			'message' => (string) $message,
+			'message' => $message,
 		);
+		if ( null !== $this->warning_sink ) {
+			call_user_func( $this->warning_sink, $message );
+		}
+		$this->data['warnings_total'] = ( isset( $this->data['warnings_total'] ) ? (int) $this->data['warnings_total'] : 0 ) + 1;
 		// Keep the list bounded: a migration with 50k unreadable files should
 		// not produce a 50k entry job file.
 		if ( count( $this->data['warnings'] ) > 500 ) {
@@ -346,7 +373,8 @@ class Job {
 	public function toPublicArray() {
 		$data = $this->data;
 		unset( $data['state'] );
-		$data['warnings'] = array_slice( $this->data['warnings'], -25 );
+		$data['warnings']       = array_slice( $this->data['warnings'], -25 );
+		$data['warnings_total'] = isset( $this->data['warnings_total'] ) ? (int) $this->data['warnings_total'] : count( $this->data['warnings'] );
 		return $data;
 	}
 }

@@ -27,7 +27,7 @@ echo
 echo "--- 2. Source site --------------------------------------------"
 cd $SRC
 rsync -a --exclude vendor --exclude .phpunit.cache --exclude tests $PLUGIN/ $SRC/wp-content/plugins/sh-clone-migration/
-rm -f $SRC/wp-content/shcm-storage/archives/*.wpress
+rm -f $SRC/wp-content/shcm-storage/archives/*.wpress $SRC/wp-content/shcm-storage/archives/*.wpress.sha256
 echo "source:      WordPress $(wp --allow-root core version 2>/dev/null), prefix wpsrc_, $(mariadb -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='wp_source';") tables, $(wp --allow-root option get home 2>/dev/null)"
 echo "content:     $(du -sh wp-content | cut -f1), $(find wp-content -type f | wc -l) files"
 echo "plugins:     $(wp --allow-root plugin list --status=active --field=name 2>/dev/null | grep -v PHP | tr '\n' ' ')"
@@ -44,7 +44,7 @@ grep -E "Scan complete|Database export finished|Files exported|Archive finalised
 
 echo
 echo "--- 4. Verify the archive --------------------------------------"
-wp --allow-root shcm verify $(basename $ARCHIVE) 2>/dev/null | grep -v PHP | tail -1
+wp --allow-root shcm verify $(basename $ARCHIVE) 2>/dev/null | grep -vE '^PHP:|trace|^#0|^\)\]|^ *.trace' | grep -E 'Success|Error|verified|entries' | tail -1
 
 echo
 echo "--- 5. Import into the destination -----------------------------"

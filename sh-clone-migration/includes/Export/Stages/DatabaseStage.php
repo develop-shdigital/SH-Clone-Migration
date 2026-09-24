@@ -10,6 +10,7 @@ namespace SHCM\Export\Stages;
 use SHCM\Archive\Format;
 use SHCM\Archive\Session;
 use SHCM\Core\Settings;
+use SHCM\Database\DatabaseReadException;
 use SHCM\Database\Exporter;
 use SHCM\Database\Inspector;
 use SHCM\Export\ChecksumLedger;
@@ -32,6 +33,11 @@ defined( 'ABSPATH' ) || exit;
  * walking the whole archive.
  */
 class DatabaseStage extends AbstractStage {
+
+	/**
+	 * Consecutive failed reads of one table before the export gives up.
+	 */
+	const MAX_READ_RETRIES = 5;
 
 	/**
 	 * Inspector.
@@ -130,10 +136,8 @@ class DatabaseStage extends AbstractStage {
 
 			$tables = (array) $job->shared( 'tables', array() );
 
-			if ( 'tables' === $state['phase'] ) {
-				if ( ! $job->param( 'include_database', true ) ) {
-					$state['phase'] = 'triggers';
-				}
+			if ( 'tables' === $state['phase'] && ! $job->param( 'include_database', true ) ) {
+				$state['phase'] = 'triggers';
 			}
 
 			$processed = 0;
@@ -149,10 +153,14 @@ class DatabaseStage extends AbstractStage {
 				if ( $done ) {
 					$state['index']++;
 					$state['table'] = array();
+				} elseif ( ! empty( $state['retry'] ) ) {
+					// One attempt per request after a failed read.
+					break;
 				}
 			}
 
 			if ( 'triggers' === $state['phase'] ) {
+				$this->assertAllTablesExported( $job, $tables );
 				$this->writeTriggers( $job, $writer, $ledger );
 				$state['phase'] = 'done';
 			}
@@ -166,17 +174,43 @@ class DatabaseStage extends AbstractStage {
 		$total  = max( 1, count( $tables ) );
 
 		if ( 'done' === $state['phase'] ) {
-			$this->logger->info( sprintf( 'Database export finished: %d tables.', count( $tables ) ) );
+			if ( ! $job->param( 'include_database', true ) ) {
+				$this->logger->warning( 'The database was left out of this archive (include_database is off).' );
+				return $this->complete( __( 'Database not included', 'sh-clone-migration' ) );
+			}
+			$totals = (array) $job->shared( 'database_totals', array() );
+			$this->logger->info(
+				sprintf(
+					'Database export finished: %1$d tables, %2$s rows, %3$s of SQL.',
+					isset( $totals['tables'] ) ? (int) $totals['tables'] : 0,
+					number_format( isset( $totals['rows'] ) ? (int) $totals['rows'] : 0 ),
+					Bytes::format( isset( $totals['sql_bytes'] ) ? (int) $totals['sql_bytes'] : 0 )
+				)
+			);
 			return $this->complete(
 				sprintf(
-					/* translators: %s: number of tables */
-					__( '%s database tables exported', 'sh-clone-migration' ),
-					number_format_i18n( count( $tables ) )
+					/* translators: 1: number of tables, 2: number of rows */
+					__( '%1$s database tables exported (%2$s rows)', 'sh-clone-migration' ),
+					number_format_i18n( isset( $totals['tables'] ) ? (int) $totals['tables'] : 0 ),
+					number_format_i18n( isset( $totals['rows'] ) ? (int) $totals['rows'] : 0 )
 				)
 			);
 		}
 
 		$current = isset( $tables[ $state['index'] ] ) ? $tables[ $state['index'] ]['name'] : '';
+		if ( ! empty( $state['waiting'] ) ) {
+			unset( $state['waiting'] );
+			$job->setStageState( $this->key(), $state );
+			return $this->waiting(
+				sprintf(
+					/* translators: 1: table name, 2: attempt */
+					__( 'Waiting to read %1$s again (attempt %2$d)', 'sh-clone-migration' ),
+					$current,
+					isset( $state['retry']['count'] ) ? (int) $state['retry']['count'] + 1 : 2
+				),
+				$state['index'] / $total
+			);
+		}
 		return $this->progress(
 			sprintf(
 				/* translators: 1: table name, 2: current index, 3: total */
@@ -198,9 +232,22 @@ class DatabaseStage extends AbstractStage {
 	 * @return void
 	 */
 	protected function writeMetadata( Job $job, $writer, ChecksumLedger $ledger ) {
-		$ledger->reset();
+		$ledger->reset( $job );
 		$job->setShared( 'checksum_digest', bin2hex( Format::initialHashState() ) );
 		$job->setShared( 'checksum_entries', 0 );
+		$job->setShared( 'entry_groups', array() );
+		$job->setShared( 'tables_exported', array() );
+		$job->setShared( 'tables_vanished', array() );
+		$job->setShared(
+			'database_totals',
+			array(
+				'included'  => (bool) $job->param( 'include_database', true ),
+				'prefix'    => $this->inspector->storedPrefix(),
+				'tables'    => 0,
+				'rows'      => 0,
+				'sql_bytes' => 0,
+			)
+		);
 
 		$manifest = Manifest::build( $job, $this->inspector );
 		$job->setShared( 'manifest', $manifest );
@@ -253,7 +300,8 @@ class DatabaseStage extends AbstractStage {
 	protected function databaseMetadata( Job $job ) {
 		$charset = $this->inspector->charset();
 		return array(
-			'prefix'        => $this->inspector->prefix(),
+			'included'      => (bool) $job->param( 'include_database', true ),
+			'prefix'        => $this->inspector->storedPrefix(),
 			'charset'       => $charset['charset'],
 			'collate'       => $charset['collate'],
 			'server'        => $this->db->get_var( 'SELECT VERSION()' ),
@@ -274,7 +322,7 @@ class DatabaseStage extends AbstractStage {
 	 * @param array                $info   Table info.
 	 * @param array                $state  Stage state (by reference).
 	 * @param Budget               $budget Budget.
-	 * @return bool True when the table is finished.
+	 * @return bool True when the table is finished (or skipped because it no longer exists).
 	 */
 	protected function dumpTable( Job $job, $writer, ChecksumLedger $ledger, array $info, array &$state, Budget $budget ) {
 		$table    = $info['name'];
@@ -287,9 +335,35 @@ class DatabaseStage extends AbstractStage {
 			)
 		);
 
-		$entry_path = Format::ENTRY_DB_TABLES . $this->safeTableFileName( $table ) . '.sql';
+		$entry_path = Format::tableEntryPath( $table );
+
+		// Give a transient condition (a lock held by another process, a
+		// restarting server) a moment before trying the same table again:
+		// wait here when the request has time for it, otherwise end the
+		// request and try again in the next one.
+		if ( ! empty( $state['retry'] ) && $state['retry']['table'] === $table ) {
+			$wait = 2 * (int) $state['retry']['count'] - ( time() - (int) $state['retry']['at'] );
+			if ( $wait > 0 ) {
+				if ( $wait >= $budget->remaining() - 1 ) {
+					$state['waiting'] = true;
+					return false;
+				}
+				sleep( $wait );
+			}
+		}
 
 		if ( empty( $state['table'] ) ) {
+			// Build the header before opening the entry, so a failed read
+			// leaves nothing half written behind.
+			try {
+				$header = $exporter->tableHeader( $table, $info );
+			} catch ( DatabaseReadException $e ) {
+				if ( $this->tableVanished( $table, $e->getMessage() ) ) {
+					return $this->skipVanishedTable( $job, $table, $state );
+				}
+				return $this->readFailed( $state, $table, $e->getMessage() );
+			}
+
 			$writer->beginEntry(
 				$entry_path,
 				array(
@@ -298,9 +372,13 @@ class DatabaseStage extends AbstractStage {
 					'mtime' => time(),
 				)
 			);
-			$writer->append( $exporter->tableHeader( $table, $info ) );
-			$state['table'] = array( 'started' => true );
-			$this->logger->info( sprintf( 'Exporting table %s (%s rows estimated).', $table, number_format_i18n( $info['rows'] ) ) );
+			$writer->append( $header );
+			$state['table'] = array(
+				'started' => true,
+				'bytes'   => strlen( $header ),
+			);
+			unset( $state['retry'] );
+			$this->logger->info( sprintf( 'Exporting table %s (%s rows estimated).', $table, number_format( (int) $info['rows'] ) ) );
 		} elseif ( $writer->openEntryPath() !== $entry_path ) {
 			// Resumed in a new request: reopen the same entry is impossible, so
 			// the writer state must already point at it.
@@ -323,7 +401,13 @@ class DatabaseStage extends AbstractStage {
 			);
 			$state['table']['rows'] = $row_state;
 			$state['table']['done'] = ! empty( $row_state['done'] );
-			$state['rows']          = (int) $state['rows'] + 0;
+
+			if ( ! empty( $row_state['error'] ) ) {
+				// Everything read so far is in the archive and the cursor sits
+				// on the last row written: retrying continues from there.
+				return $this->readFailed( $state, $table, $row_state['error'] );
+			}
+			unset( $state['retry'] );
 		}
 
 		if ( empty( $state['table']['done'] ) ) {
@@ -332,15 +416,151 @@ class DatabaseStage extends AbstractStage {
 
 		$summary = $writer->finishEntry();
 		$ledger->record( $job, $summary );
+
+		$rows = isset( $state['table']['rows']['rows'] ) ? (int) $state['table']['rows']['rows'] : 0;
+		$this->recordTable( $job, $table, $info['type'], $rows, (int) $summary['size'] );
+
 		$this->logger->info(
 			sprintf(
-				'Table %1$s exported (%2$s in the archive).',
+				'Table %1$s exported: %2$s rows, %3$s of SQL (%4$s in the archive).',
 				$table,
-				Bytes::format( $summary['stored'] )
+				number_format( $rows ),
+				Bytes::format( (int) $summary['size'] ),
+				Bytes::format( (int) $summary['stored'] )
 			)
 		);
 
 		return true;
+	}
+
+	/**
+	 * Remember what was written for a table.
+	 *
+	 * @param Job    $job   Job.
+	 * @param string $table Table name.
+	 * @param string $type  table|view.
+	 * @param int    $rows  Rows written.
+	 * @param int    $bytes SQL bytes written.
+	 * @return void
+	 */
+	protected function recordTable( Job $job, $table, $type, $rows, $bytes ) {
+		$exported           = (array) $job->shared( 'tables_exported', array() );
+		$exported[ $table ] = array(
+			'type'  => $type,
+			'rows'  => $rows,
+			'bytes' => $bytes,
+		);
+		$job->setShared( 'tables_exported', $exported );
+
+		$totals              = (array) $job->shared( 'database_totals', array() );
+		$totals['tables']    = ( isset( $totals['tables'] ) ? (int) $totals['tables'] : 0 ) + 1;
+		$totals['rows']      = ( isset( $totals['rows'] ) ? (int) $totals['rows'] : 0 ) + $rows;
+		$totals['sql_bytes'] = ( isset( $totals['sql_bytes'] ) ? (int) $totals['sql_bytes'] : 0 ) + $bytes;
+		$job->setShared( 'database_totals', $totals );
+	}
+
+	/**
+	 * Count a failed read and decide whether to retry on the next request.
+	 *
+	 * @param array  $state Stage state (by reference).
+	 * @param string $table Table name.
+	 * @param string $error Error message.
+	 * @return bool Always false (the table is not finished).
+	 * @throws \RuntimeException After too many consecutive failures.
+	 */
+	protected function readFailed( array &$state, $table, $error ) {
+		$retry = isset( $state['retry'] ) && $state['retry']['table'] === $table ? $state['retry'] : array(
+			'table' => $table,
+			'count' => 0,
+		);
+		++$retry['count'];
+		$retry['at']    = time();
+		$state['retry'] = $retry;
+
+		$this->logger->warning( sprintf( 'Reading table %1$s failed (attempt %2$d of %3$d): %4$s', $table, $retry['count'], self::MAX_READ_RETRIES, $error ) );
+
+		if ( $retry['count'] >= self::MAX_READ_RETRIES ) {
+			throw new \RuntimeException(
+				sprintf(
+					/* translators: 1: table name, 2: attempts, 3: database error */
+					__( 'The database table %1$s could not be read after %2$d attempts, so the export was stopped rather than produce an archive with an incomplete table. Database error: %3$s', 'sh-clone-migration' ),
+					$table,
+					self::MAX_READ_RETRIES,
+					$error
+				)
+			);
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a table disappeared after the scan.
+	 *
+	 * @param string $table Table name.
+	 * @param string $error The read error.
+	 * @return bool
+	 */
+	protected function tableVanished( $table, $error ) {
+		if ( false === stripos( $error, "doesn't exist" ) && false === stripos( $error, 'does not exist' ) ) {
+			return false;
+		}
+		$this->inspector->flush();
+		return ! isset( $this->inspector->inventory( true )[ $table ] );
+	}
+
+	/**
+	 * Skip a table that was dropped after the scan (a plugin's temporary
+	 * table, typically) and say so.
+	 *
+	 * @param Job    $job   Job.
+	 * @param string $table Table name.
+	 * @param array  $state Stage state (by reference).
+	 * @return bool True: move on to the next table.
+	 */
+	protected function skipVanishedTable( Job $job, $table, array &$state ) {
+		$vanished   = (array) $job->shared( 'tables_vanished', array() );
+		$vanished[] = $table;
+		$job->setShared( 'tables_vanished', array_values( array_unique( $vanished ) ) );
+		$job->addWarning(
+			sprintf(
+				/* translators: %s: table name */
+				__( 'Table %s was deleted from the database while the export was running, so it is not in the archive.', 'sh-clone-migration' ),
+				$table
+			)
+		);
+		unset( $state['retry'] );
+		return true;
+	}
+
+	/**
+	 * Refuse to continue unless every planned table has an entry.
+	 *
+	 * @param Job   $job    Job.
+	 * @param array $tables Planned tables.
+	 * @return void
+	 * @throws \RuntimeException When a table is missing.
+	 */
+	protected function assertAllTablesExported( Job $job, array $tables ) {
+		if ( ! $job->param( 'include_database', true ) ) {
+			return;
+		}
+		$exported = (array) $job->shared( 'tables_exported', array() );
+		$vanished = array_flip( (array) $job->shared( 'tables_vanished', array() ) );
+		$missing  = array();
+		foreach ( $tables as $info ) {
+			if ( ! isset( $exported[ $info['name'] ] ) && ! isset( $vanished[ $info['name'] ] ) ) {
+				$missing[] = $info['name'];
+			}
+		}
+		if ( ! empty( $missing ) ) {
+			throw new \RuntimeException(
+				sprintf(
+					/* translators: %s: table names */
+					__( 'These database tables were planned but not written to the archive: %s', 'sh-clone-migration' ),
+					implode( ', ', array_slice( $missing, 0, 20 ) )
+				)
+			);
+		}
 	}
 
 	/**
@@ -357,9 +577,9 @@ class DatabaseStage extends AbstractStage {
 		}
 		try {
 			$exporter   = new Exporter( $this->db, $this->inspector );
-			$statements = $exporter->triggerStatements();
+			$statements = $exporter->triggerStatements( array_keys( (array) $job->shared( 'tables_exported', array() ) ) );
 		} catch ( \Exception $e ) {
-			$job->addWarning( 'Trigger definitions could not be read: ' . $e->getMessage() );
+			$job->addWarning( 'Trigger definitions could not be read, so database triggers are not in the archive: ' . $e->getMessage() );
 			return;
 		}
 
@@ -403,17 +623,6 @@ class DatabaseStage extends AbstractStage {
 		}
 
 		return $configured;
-	}
-
-	/**
-	 * Make a table name safe to use as an archive entry file name.
-	 *
-	 * @param string $table Table name.
-	 * @return string
-	 */
-	protected function safeTableFileName( $table ) {
-		$safe = preg_replace( '/[^A-Za-z0-9_\-]/', '_', $table );
-		return '' === $safe ? 'table_' . md5( $table ) : $safe;
 	}
 
 	/**

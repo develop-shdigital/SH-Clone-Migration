@@ -336,6 +336,35 @@ class Reader {
 	}
 
 	/**
+	 * Iterate the raw blocks of an entry starting at a byte position inside
+	 * its payload (a position tell() reported after an earlier block).
+	 *
+	 * @param array $entry    Entry descriptor.
+	 * @param int   $position Absolute file position of a block header.
+	 * @return \Generator Yields raw block strings.
+	 * @throws \RuntimeException When the position is outside the payload or a block is corrupt.
+	 */
+	public function blocksFromOffset( array $entry, $position ) {
+		$end = $this->entryEndOffset( $entry );
+		if ( $position < $entry['payload_offset'] || $position > $end ) {
+			throw new \RuntimeException( sprintf( 'Invalid resume position inside entry %s.', $entry['path'] ) );
+		}
+		$this->seek( $position );
+		while ( ftell( $this->handle ) < $end ) {
+			yield $this->readBlock( $entry );
+		}
+	}
+
+	/**
+	 * Current file position.
+	 *
+	 * @return int
+	 */
+	public function tell() {
+		return (int) ftell( $this->handle );
+	}
+
+	/**
 	 * Byte offset of a block index inside an entry payload.
 	 *
 	 * Skipping is a pure seek operation: no block is decoded on the way.

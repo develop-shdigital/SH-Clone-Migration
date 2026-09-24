@@ -102,6 +102,22 @@ class Catalog {
 				if ( empty( $info['source'] ) && isset( $footer['source'] ) ) {
 					$info['source'] = $footer['source'];
 				}
+				// Archives from 1.0.1 on record what was actually written.
+				if ( isset( $footer['database'] ) && is_array( $footer['database'] ) ) {
+					$info['database_contents'] = array(
+						'included'  => ! empty( $footer['database']['included'] ),
+						'prefix'    => isset( $footer['database']['prefix'] ) ? (string) $footer['database']['prefix'] : '',
+						'tables'    => isset( $footer['database']['tables'] ) ? (int) $footer['database']['tables'] : 0,
+						'rows'      => isset( $footer['database']['rows'] ) ? (int) $footer['database']['rows'] : 0,
+						'sql_bytes' => isset( $footer['database']['sql_bytes'] ) ? (int) $footer['database']['sql_bytes'] : 0,
+					);
+				}
+				if ( isset( $footer['groups'] ) && is_array( $footer['groups'] ) ) {
+					$info['groups'] = $footer['groups'];
+				}
+				$info['files_skipped'] = isset( $footer['files_skipped'] ) ? (int) $footer['files_skipped'] : 0;
+				$info['warnings']      = isset( $footer['warnings'] ) ? (int) $footer['warnings'] : 0;
+				$info['sha256']        = $this->sha256( $path );
 			}
 		} catch ( \Exception $e ) {
 			$info['error'] = $e->getMessage();
@@ -114,8 +130,11 @@ class Catalog {
 				$info['php']       = isset( $manifest['php']['version'] ) ? $manifest['php']['version'] : '';
 				$info['database']  = isset( $manifest['database']['server'] ) ? $manifest['database']['server'] : '';
 				$info['source']    = isset( $manifest['site']['home'] ) ? $manifest['site']['home'] : $info['source'];
-				$info['files']     = isset( $manifest['files']['count'] ) ? (int) $manifest['files']['count'] : $info['files'];
-				$info['tables']    = isset( $manifest['database']['tables'] ) ? (int) $manifest['database']['tables'] : $info['tables'];
+				// The manifest's file and table counts are what the scan
+				// planned, written before anything was copied. They are never
+				// shown as the contents: a complete archive's footer records
+				// what was written, and an incomplete archive has no known
+				// contents at all.
 				$info['prefix']    = isset( $manifest['wordpress']['table_prefix'] ) ? $manifest['wordpress']['table_prefix'] : '';
 				$info['multisite'] = ! empty( $manifest['wordpress']['multisite'] );
 			}
@@ -172,7 +191,61 @@ class Catalog {
 	}
 
 	/**
-	 * Delete an archive.
+	 * Path of the checksum file that sits next to an archive.
+	 *
+	 * The file uses the sha256sum format ("<hex>  <name>"), so it can be
+	 * checked with `sha256sum -c` as well as read back here.
+	 *
+	 * @param string $path Archive path.
+	 * @return string
+	 */
+	public static function checksumPath( $path ) {
+		return $path . '.sha256';
+	}
+
+	/**
+	 * Record the SHA-256 of a finished archive.
+	 *
+	 * @param string $path Archive path.
+	 * @param string $hex  Lower case hex digest.
+	 * @return bool
+	 */
+	public static function writeChecksum( $path, $hex ) {
+		if ( ! preg_match( '/^[0-9a-f]{64}$/', (string) $hex ) ) {
+			return false;
+		}
+		$line = $hex . '  ' . basename( $path ) . "\n";
+		return strlen( $line ) === (int) @file_put_contents( self::checksumPath( $path ), $line, LOCK_EX );
+	}
+
+	/**
+	 * SHA-256 of an archive, when one was recorded for its current contents.
+	 *
+	 * A checksum file older than the archive belongs to an earlier file with
+	 * the same name and is ignored.
+	 *
+	 * @param string $path Archive path.
+	 * @return string Hex digest, or an empty string.
+	 */
+	public function sha256( $path ) {
+		$sidecar = self::checksumPath( $path );
+		if ( ! is_file( $sidecar ) ) {
+			return '';
+		}
+		clearstatcache( true, $sidecar );
+		clearstatcache( true, $path );
+		if ( (int) @filemtime( $sidecar ) < (int) @filemtime( $path ) ) {
+			return '';
+		}
+		$line = (string) @file_get_contents( $sidecar, false, null, 0, 512 );
+		if ( ! preg_match( '/^([0-9a-f]{64})\s+\*?(.+?)\s*$/', $line, $matches ) ) {
+			return '';
+		}
+		return basename( $path ) === $matches[2] ? $matches[1] : '';
+	}
+
+	/**
+	 * Delete an archive and its checksum file.
 	 *
 	 * @param string $name File name.
 	 * @return bool
@@ -182,7 +255,11 @@ class Catalog {
 		if ( null === $path ) {
 			return false;
 		}
-		return @unlink( $path );
+		$deleted = @unlink( $path );
+		if ( $deleted && is_file( self::checksumPath( $path ) ) ) {
+			@unlink( self::checksumPath( $path ) );
+		}
+		return $deleted;
 	}
 
 	/**

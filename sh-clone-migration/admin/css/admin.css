@@ -431,3 +431,63 @@
 	.shcm-stage .shcm-bar, .shcm-stage__percent { display: none; }
 	.shcm-actions { text-align: left; }
 }
+
+.shcm-code {
+	margin: 8px 0 0;
+	padding: 8px 10px;
+	overflow-x: auto;
+	background: rgba(0, 0, 0, 0.04);
+	border-radius: 3px;
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: pre;
+}
+
+.shcm-text-danger {
+	color: var(--shcm-danger);
+	font-weight: 600;
+}
+
+.shcm-hash {
+	display: inline-block;
+	max-width: 100%;
+	font-size: 11px;
+	word-break: break-all;
+	user-select: all;
+}
+
+.shcm-summary {
+	margin: 12px 0;
+}
+
+.shcm-summary th {
+	width: 140px;
+	font-weight: 600;
+	vertical-align: top;
+}
+
+.shcm-verify-help {
+	margin: 8px 0 16px;
+}
+
+.shcm-verify-help summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+/* Give the archive contents room on desktop screens; phones keep the
+   normal table flow. */
+@media screen and (min-width: 783px) {
+	#shcm-backups-table .shcm-contents {
+		min-width: 20em;
+	}
+}
+.shcm-actions .description {
+	display: block;
+	margin-bottom: 4px;
+	white-space: normal;
+}
+.shcm-table-scroll {
+	max-width: 100%;
+	overflow-x: auto;
+}

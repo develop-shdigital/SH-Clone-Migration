@@ -18,8 +18,9 @@ defined( 'ABSPATH' ) || exit;
  * Builds the manifest and the safe configuration snapshot stored in an archive.
  *
  * Nothing secret goes in here: no database credentials, no authentication
- * keys, no salts. The manifest is readable without the migration password so
- * that the import screen can describe an archive before decrypting it.
+ * keys, no salts. When the archive is encrypted the manifest is encrypted
+ * with everything else; only the footer (entry counts, database and file
+ * totals) stays readable without the migration password.
  */
 class Manifest {
 
@@ -59,6 +60,7 @@ class Manifest {
 				'sapi'    => PHP_SAPI,
 			),
 			'database'    => array(
+				'included' => (bool) $job->shared( 'database_included', $job->param( 'include_database', true ) ),
 				'server'  => self::databaseServer(),
 				'charset' => $inspector->charset(),
 				'prefix'  => $inspector->prefix(),
@@ -91,6 +93,8 @@ class Manifest {
 				'include_core' => (bool) $job->param( 'include_core', false ),
 			),
 			'exclusions'  => (array) $job->param( 'exclusions', array() ),
+			'effective_exclusions' => (array) $job->shared( 'effective_exclusions', array() ),
+			'max_file_size'        => (int) $job->shared( 'max_file_size', 0 ),
 		);
 	}
 

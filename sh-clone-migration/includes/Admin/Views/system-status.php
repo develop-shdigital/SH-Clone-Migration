@@ -23,11 +23,15 @@ Menu::header(
 <?php foreach ( $shcm_report['warnings'] as $shcm_warning ) : ?>
 	<div class="shcm-alert shcm-alert--<?php echo esc_attr( $shcm_warning['level'] ); ?>">
 		<?php echo esc_html( $shcm_warning['message'] ); ?>
+		<?php if ( ! empty( $shcm_warning['code'] ) ) : ?>
+			<pre class="shcm-code"><?php echo esc_html( $shcm_warning['code'] ); ?></pre>
+		<?php endif; ?>
 	</div>
 <?php endforeach; ?>
 
 <div class="shcm-panel">
 	<h2><?php esc_html_e( 'Environment', 'sh-clone-migration' ); ?></h2>
+	<div class="shcm-table-scroll">
 	<table class="widefat striped shcm-table">
 		<tbody>
 		<?php foreach ( $shcm_report['rows'] as $shcm_key => $shcm_row ) : ?>
@@ -38,6 +42,7 @@ Menu::header(
 		<?php endforeach; ?>
 		</tbody>
 	</table>
+	</div>
 </div>
 
 <div class="shcm-panel">
@@ -87,6 +92,7 @@ Menu::header(
 
 <div class="shcm-panel">
 	<h2><?php esc_html_e( 'Storage', 'sh-clone-migration' ); ?></h2>
+	<div class="shcm-table-scroll">
 	<table class="widefat striped shcm-table">
 		<tbody>
 		<tr>
@@ -113,4 +119,5 @@ Menu::header(
 		</tr>
 		</tbody>
 	</table>
+	</div>
 </div>

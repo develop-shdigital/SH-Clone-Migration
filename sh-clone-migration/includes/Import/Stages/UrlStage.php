@@ -94,6 +94,10 @@ class UrlStage extends AbstractStage {
 		$source      = (string) $job->shared( 'source' );
 		$destination = (string) $job->shared( 'destination' );
 
+		if ( ! $job->param( 'include_database', true ) || $job->shared( 'database_absent' ) ) {
+			return $this->complete( __( 'No database was restored, so there are no URLs to replace', 'sh-clone-migration' ) );
+		}
+
 		if ( '' === $source ) {
 			return $this->complete( __( 'No source URL recorded, nothing to replace', 'sh-clone-migration' ) );
 		}

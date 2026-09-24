@@ -2,6 +2,165 @@
 
 Two suites back this plugin: an automated PHPUnit suite that runs anywhere,
 and a full end-to-end migration between two real WordPress installations.
+Version 1.0.1 added tests that run inside WordPress against a real database,
+an edge-case migration, and a download test against Apache; they are
+summarised first.
+
+---
+
+## Version 1.0.1: downloads, database completeness, file completeness
+
+Prompted by a download that Internet Download Manager reported as "file size
+unknown", and by the question whether the database is really in the archive.
+
+### Why the size was unknown
+
+Reproduced on Apache 2.4.58 with PHP 8.4 in both common set-ups:
+
+| Set-up | `Content-Length` of a PHP download | Cause |
+|---|---|---|
+| Apache + mod_php + `SetOutputFilter DEFLATE` | removed, body gzip-compressed and chunked | mod_deflate recompresses every response unless `no-gzip` is set |
+| Apache + PHP-FPM (`mod_proxy_fcgi`), no compression at all | removed, body chunked (HTTP/2: no length) | since 2.4.59 (the CVE-2024-24795 fix, backported by distributions) Apache drops the length a FastCGI backend sends unless the request carries `ap_trust_cgilike_cl` |
+
+A client sees no size in both cases, which is exactly the IDM message. The
+bytes that arrive are the complete archive (the old handler already sent the
+whole file); the client just cannot prove it, cannot split the download and
+cannot resume it. The fix: the download handler sets `no-gzip` itself under
+mod_php, and the plugin keeps a marked `.htaccess` block that sets `no-gzip`,
+`dont-vary` and `ap_trust_cgilike_cl` for the two download actions (see
+[ARCHITECTURE.md](../ARCHITECTURE.md#exporting)). A PHP-only probe under
+PHP-FPM confirmed the second cause independently of the plugin: PHP-FPM
+emits `Content-Length: 5000000`, Apache's trace shows it received that
+header, and the response still goes out chunked.
+
+### Download endpoint — `scripts/download-test.sh`
+
+29 checks: HTTP 200 with the exact `Content-Length`, no `Content-Encoding`,
+no chunking, `Accept-Ranges`, `ETag`, `Last-Modified`, `X-SHCM-SHA256`
+equal to the file's SHA-256, byte-identical body; `HEAD` with the length;
+closed, suffix, open and past-the-end ranges with the right bytes and
+`Content-Range`; 416 with `bytes */size`; multi-range and stale `If-Range`
+answered with the whole file; matching `If-Range` answered with 206; eight
+parallel ranges (the way IDM splits a download) reassembled byte-exactly;
+an interrupted download resumed with `curl -C -`; no session, a bad nonce,
+traversal in the name and a direct URL to the storage directory refused;
+an incomplete archive refused with 409.
+
+| Server (both with `SetOutputFilter DEFLATE`) | 1.0.0 | 1.0.1 |
+|---|---|---|
+| Apache 2.4.58 + mod_php 8.4 | 17 / 29 | **29 / 29** |
+| Apache 2.4.58 + PHP-FPM 8.4 (`mod_proxy_fcgi`) | 16 / 29 | **29 / 29** |
+
+With 1.0.0 both servers sent the archive gzip-compressed and chunked, with no
+`Content-Length`, no `ETag` or `Last-Modified` (so Chrome and Edge restart an
+interrupted download from zero), the head of the file for a suffix range, a
+`Content-Length` larger than the body for a range past the end, a partial
+response to a stale `If-Range`, and a 200 for an archive that was still being
+written. (A browser decodes the gzip body back into the complete archive;
+`curl -o` without `--compressed` saves it compressed, which is why the
+"byte-identical" check also fails for 1.0.0.)
+
+### Database engine — `tests/db/database-engine-test.php`
+
+Run inside WordPress against MariaDB 10.11 in a scratch schema, 36 checks,
+all passing: a schema holding two complete installations (`wp_` and
+`wp_shop_`) is split correctly from either side, with plugin tables such as
+`wp_foo_options` and the Simple:Press forum's `wp_sfoptions`/`wp_sfposts`
+kept with their site; composite primary keys are found, unique keys on
+nullable columns and MariaDB "long unique" HASH indexes rejected; a
+composite-key table paged in batches of 1,000 while rows are deleted and
+inserted between batches dumps every row that existed throughout exactly
+once; a nullable unique key, a float key, a text key, a keyless table and a
+HASH-indexed table with values sharing a long prefix all finish with every
+row exactly once; BIT columns (a BIT primary key and BIT(64) with 2^64-1
+included) survive a dump and restore under strict mode; a key holding
+non-ASCII text in a table that mixes character sets pages to the end; a lock
+wait timeout and a `max_statement_time` abort in the middle of a table are
+reported as errors (the table is not marked done, the cursor stays on the
+last row written) and the dump resumes to all 5,000 rows exactly once;
+triggers are filtered to exported tables.
+
+### Import safety — `tests/db/import-safety-test.php`
+
+13 checks, all passing, each against a real database: a single statement
+larger than the 8 MB checkpoint restores; a sibling installation that shares
+this site's users through `CUSTOM_USER_TABLE` is never dropped; an archive
+whose metadata lists tables it does not contain drops nothing and is reported
+as having no database; a table that would land on a sibling installation's
+name after the prefix rewrite is skipped with a warning; a request killed
+part way through a keyless table is followed by a restore that completes with
+3,000 rows, 3,000 distinct (no row inserted twice); real duplicate keys are
+reported with the table name and row count, not dropped silently; the
+source's active plugins are still known after a kill right after the options
+table was overwritten.
+
+### Found by an independent review, then fixed
+
+Six reviewers each read one area of the 1.0.1 changes and wrote a
+reproduction for every problem they reported; each one was then fixed and the
+reproduction re-run. Among them:
+
+- a plugin whose tables look like a site (`wp_sfoptions` + `wp_sfposts`) was
+  taken for a second installation and left out of the export;
+- BIT values were written as hex text, turning every `b'0'` into 1;
+- a keyset cursor holding non-ASCII text was refused by `wpdb::query()` on a
+  table with mixed character sets, so the export never finished;
+- a failed read's retry pause spun the job runner instead of waiting;
+- a restore killed part way through a keyless table inserted rows twice on
+  resume;
+- a symlink to `/` or into `/proc`, a directory deleted between two scan
+  requests, two links to the same outside directory, and a second link to the
+  uploads directory each produced a wrong file list;
+- a symlink whose target was changed inside the archive still verified
+  (fixed by ledger scheme 2);
+- an incomplete archive, and a complete one whose export skipped files, were
+  described with the scan's planned counts instead of what they hold;
+- files the scan skipped (unreadable, over the size limit) were missing from
+  the archive's record and the CLI output;
+- a step that raised more than 500 warnings lost the earlier names from the
+  log.
+
+Each has a regression test in the suites above or below.
+
+### Edge-case migration — `scripts/e2e-edge.sh`
+
+A shop on prefix `wp_shop_` sharing its database with a second installation
+on `wp_`; uploads in a symlinked directory outside the site
+(`wp-content/uploads -> ../../edge-shared/uploads`); a plugin loaded through
+a symlink; a Latin-1 file name, a file name with a backslash, an internal
+`self -> .` link and an `escape -> ../..` link; runtime files in a theme's
+`node_modules`; a plugin's `vendor/cache` directory with "Excluded
+directories" set to `cache`; a 40 MB file. It is exported with core files
+included, **one tiny request at a time** (8,438 requests, every one starting
+with its budget already spent), and the 40 MB file is appended to after its
+copy has begun. The archive is imported with "skip core files" into a
+destination whose database also holds a sibling installation on
+`wpdst_shop_`, a prefix that starts with the destination's own `wpdst_`.
+
+| | 1.0.0 | 1.0.1 |
+|---|---|---|
+| Checks passed | 9 / 27 | **27 / 27** |
+| Tables in the archive | 24 (the sibling's 12 included, with its admin's password hash) | 12 |
+| Destination's sibling installation after the import | all 12 tables dropped | untouched |
+| Symlinked uploads, symlinked plugin, Latin-1 and backslash names, `node_modules`, `vendor/cache` | missing on the destination | restored byte-identical |
+| 40 MB file modified mid-copy | not archived at all (uploads missing) | torn copy discarded, copied again, restored identical to its final content |
+
+The 1.0.1 run also checks that the archive's SHA-256 matches `sha256sum` and
+verifies with `sha256sum -c`, that the row count recorded in the archive
+equals `SELECT COUNT(*)` over the exported tables, and that every restored
+table has the source's row count (composite keys included).
+
+### Standard migration and browser
+
+`scripts/e2e.sh` (below) still passes all 81 checks, `scripts/e2e-edge.sh`
+27 of 27, and `scripts/download-test.sh` 29 of 29 on both servers after the
+review fixes, every page returns 200
+with no source references, and 4,000 of 4,000 compared files are identical.
+A browser run through the admin screens (Chromium via Playwright) exported
+the source site and showed: "Archive size 67.23 MB — exactly 70,499,481
+bytes", the SHA-256, "Database: Included — 50 tables, 1,152 rows, 1.06 MB of
+SQL (table prefix wpsrc_)", the files per group and "every one of its 10,153
+entries matched its checksum"; the Backups screen showed the same.
 
 ---
 
@@ -13,20 +172,23 @@ $ composer test:all
 PHPUnit 11.5.56 by Sebastian Bergmann and contributors.
 Runtime:       PHP 8.4.19
 
-...............................................................  95 / 95 (100%)
+............................................................... 145 / 145 (100%)
 
-OK (95 tests, 348 assertions)
+OK (145 tests, 1785 assertions)
 ```
 
 | Suite | Tests | What it proves |
 |---|---|---|
-| `ArchiveTest` | 12 | Round trips of text, binary, empty and directory entries; deflate actually shrinks and reads back; a writer paused mid-entry resumes byte-exactly; a torn tail from a killed request is truncated and recovered; encryption rejects a missing or wrong password and round trips with the right one; bit corruption and truncation are detected; extraction resumes at block boundaries and reproduces the entry digest |
+| `ArchiveTest` | 16 | Round trips of text, binary, empty and directory entries; deflate actually shrinks and reads back; a writer paused mid-entry resumes byte-exactly; a torn tail from a killed request is truncated and recovered; encryption rejects a missing or wrong password and round trips with the right one; bit corruption and truncation are detected; extraction resumes at block boundaries and reproduces the entry digest; an aborted entry leaves no trace; verification resumes inside a large entry; backslashes and non-UTF-8 bytes in entry names round trip |
 | `SerializedRewriterTest` | 13 | Every serialized token type; nested arrays and array keys; unicode and binary strings keep their byte lengths; objects of classes that are not loaded survive; back references stay valid; nested serialized strings are recursed into; `Serializable` payloads and PHP 8.1 enums keep their byte counts; a broken payload is refused rather than rewritten; deep nesting is refused rather than exploding |
 | `ReplacerTest` | 19 | Absolute URLs in both schemes, protocol-relative, percent-encoded in both cases, JSON-escaped slashes, Gutenberg block attributes, filesystem paths, ports; serialized values keep their lengths; unparsable values are left alone; a Windows path is not mistaken for a serialized payload; bare domains are kept by default and replaceable on request; unrelated domains are untouched; longest-rule-first prevents double replacement |
 | `SqlStreamReaderTest` | 11 | Semicolons inside strings, escaped quotes, doubled quotes and backtick identifiers do not split a statement; line, hash and block comments; a trailing backslash at a chunk boundary; identical output at chunk sizes from 1 byte to 1 KB; the resume offset is exact; splitting stays linear on a statement with thousands of semicolons |
-| `FilesystemTest` | 10 | Traversal, absolute paths, drive letters, stream wrappers and null bytes are rejected; harmless unicode paths are accepted; symlink escape is detected; exclusion globs match at any depth without over-matching; the on-disk queue resumes from a byte offset |
+| `FilesystemTest` | 11 | Traversal, absolute paths, drive letters, stream wrappers and null bytes are rejected; harmless unicode paths are accepted; symlink escape is detected; exclusion globs match at any depth without over-matching; the on-disk queue resumes from a byte offset |
 | `JobsTest` | 10 | A job runs through every stage; it pauses when the budget is spent and resumes from disk with its state intact; a failure is recorded with its stage and every cleanup handler runs; a cancellation written by another request stops the job; progress is weighted by stage; job ids cannot escape the storage directory; the migration password is never written to disk |
-| `SupportTest` | 12 | Size parsing and 64-bit packing; fixed-width size fields; JSON helpers; the log redactor hides database passwords, API keys, bearer tokens and connection URIs; the prefix rewriter changes table names but never row data; the cipher round trips and rejects tampered blocks; settings are clamped to sane ranges |
+| `SupportTest` | 14 | Size parsing and 64-bit packing; fixed-width size fields; JSON helpers; the log redactor hides database passwords, API keys, bearer tokens and connection URIs; the prefix rewriter changes table names but never row data; the cipher round trips and rejects tampered blocks; settings are clamped to sane ranges |
+| `DeliveryTest` | 16 | HTTP ranges: none, closed, suffix, open, an end past the file clamped, a start past the file unsatisfiable (416), invalid and multi-range requests ignored, `If-Range` honoured only for the current version, an empty file; bytes that are not UTF-8 survive JSON losslessly, JSON is never written half, and only bad bytes are replaced for display; the whole-file SHA-256 resumes across requests and notices a file that changed; the checksum file round trips and is ignored when stale; deleting an archive deletes its checksum |
+| `FileSelectionTest` | 19 | A symlinked uploads directory is its own root; a directory linked from outside is followed once and a loop inside it is kept as a link; links to a parent of the site, to `/` and into `/proc` are refused with a warning; two links to the same outside directory are both archived; a second link to the uploads root is kept as a link; Latin-1 and backslash names survive the queues; content is not walked twice with core included; a directory of 1,234 files is scanned across requests with every file exactly once, and files deleted between requests are neither duplicated nor skipped in another's place; anchored exclusions; queue truncation, torn and corrupt lines; table entry names never collide |
+| `IntegrityTest` | 10 | An incomplete archive claims no contents; a complete one shows what was written, not what was planned; resuming a writer onto a file shorter than its saved state is refused; a damaged directory header is caught; a redirected symlink fails verification under ledger scheme 2; the one-shot SHA-256 of older PHP succeeds, retries once after a kill and gives up after repeated kills; every one of 1,200 warnings raised in one step reaches the log |
 | `FilePipelineTest` | 6 | A real directory tree scanned, archived and restored, then compared file by file; excluded paths never enter the archive; empty directories survive; a hostile archive containing `../../../evil.php` writes nothing outside the destination; symlinks are recorded, not followed; a scan with an exhausted budget still makes progress and completes |
 
 Two bugs were found by these tests and fixed: a block comment split across a

@@ -95,6 +95,18 @@ abstract class AbstractStage implements StageInterface {
 	}
 
 	/**
+	 * Build a "nothing to do until later" result: the runner ends the
+	 * request instead of calling the stage again straight away.
+	 *
+	 * @param string $message  Message.
+	 * @param float  $progress Progress within the stage, 0..1.
+	 * @return Result
+	 */
+	protected function waiting( $message, $progress ) {
+		return $this->progress( $message, $progress, array( 'yield' => true ) );
+	}
+
+	/**
 	 * Build a "more work to do" result.
 	 *
 	 * @param string $message  Message.

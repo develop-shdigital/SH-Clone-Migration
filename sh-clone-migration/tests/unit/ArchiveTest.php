@@ -324,4 +324,70 @@ class ArchiveTest extends TestCase {
 		$this->assertSame( $payload, file_get_contents( $target ) );
 		$this->assertSame( $entry['hash'], $state['hash'] );
 	}
+
+	public function testAbortedEntryLeavesNoTrace() {
+		$path   = $this->path();
+		$writer = Writer::create( $path, array( 'block_size' => 65536 ) );
+		$writer->addString( 'manifest.json', '{}' );
+		$writer->addString( 'files/kept.txt', 'kept' );
+		$writer->beginEntry( 'files/torn.bin' );
+		$writer->append( random_bytes( 200000 ) );
+		$writer->abortEntry();
+		$writer->addString( 'files/after.txt', 'after' );
+		$writer->close();
+		$writer->release();
+
+		$reader = new Reader( $path );
+		$this->assertSame( 'kept', $this->readEntry( $reader, 'files/kept.txt' ) );
+		$this->assertSame( 'after', $this->readEntry( $reader, 'files/after.txt' ) );
+		$this->assertNull( $reader->findEntry( 'files/torn.bin' ) );
+		$this->assertSame( 3, $reader->footer()['entries'] );
+		$this->assertTrue( ( new Verifier( new Reader( $path ) ) )->verifyAll()['ok'] );
+	}
+
+	public function testVerificationResumesInsideALargeEntry() {
+		$path   = $this->path();
+		$writer = Writer::create( $path, array( 'block_size' => 65536, 'compress' => false ) );
+		$writer->addString( 'files/small.txt', 'small' );
+		$writer->addString( 'files/large.bin', random_bytes( 65536 * 20 + 7 ) );
+		$writer->addString( 'files/last.txt', 'last' );
+		$writer->close();
+		$writer->release();
+
+		$verifier = new Verifier( new Reader( $path ) );
+		$state    = $verifier->initialState();
+		$calls    = 0;
+		do {
+			// A fresh reader and an expired budget per call, as across requests.
+			$verifier = new Verifier( new Reader( $path ) );
+			$state    = $verifier->verifyEntries( $state, new \SHCM\Jobs\Budget( 0.000001, 0 ) );
+			$state    = json_decode( json_encode( $state ), true );
+			++$calls;
+		} while ( empty( $state['done'] ) && $calls < 100 );
+
+		$this->assertSame( array(), $state['errors'] );
+		$this->assertSame( 3, $state['checked'] );
+		$this->assertGreaterThan( 15, $calls, 'the large entry was verified across many calls' );
+	}
+
+	public function testBackslashesInNamesAreKept() {
+		$path   = $this->path();
+		$writer = Writer::create( $path );
+		$writer->addString( 'files/wp-content/images\\logo.png', 'png' );
+		$writer->close();
+		$writer->release();
+		$this->assertSame( 'png', $this->readEntry( new Reader( $path ), 'files/wp-content/images\\logo.png' ) );
+	}
+
+	public function testNonUtf8EntryNamesRoundTrip() {
+		$name   = "files/wp-content/Preisliste_M\xe4rz.pdf";
+		$path   = $this->path();
+		$writer = Writer::create( $path );
+		$writer->addString( 'manifest.json', '{}' );
+		$writer->addString( $name, 'pdf' );
+		$writer->close();
+		$writer->release();
+		$this->assertSame( 'pdf', $this->readEntry( new Reader( $path ), $name ) );
+		$this->assertTrue( ( new Verifier( new Reader( $path ) ) )->verifyAll()['ok'] );
+	}
 }

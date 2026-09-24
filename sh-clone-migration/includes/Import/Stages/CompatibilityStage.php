@@ -97,8 +97,18 @@ class CompatibilityStage extends AbstractStage {
 
 		$report = array();
 
-		$report['theme']   = $this->restoreTheme( $job );
-		$report['plugins'] = $this->restorePlugins( $job );
+		// The active theme and plugin list come from the restored database.
+		// Without one, the destination keeps its own.
+		if ( $job->param( 'include_database', true ) && ! $job->shared( 'database_absent' ) ) {
+			$report['theme']   = $this->restoreTheme( $job );
+			$report['plugins'] = $this->restorePlugins( $job );
+		} else {
+			$report['theme']   = array( 'stylesheet' => '' );
+			$report['plugins'] = array(
+				'activated' => array(),
+				'note'      => 'database_not_restored',
+			);
+		}
 
 		$post = new PostMigration( $this->db );
 		$report['cleanup'] = $post->runImmediate( $this->storage );

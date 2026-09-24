@@ -219,3 +219,31 @@ if ( ! function_exists( 'wp_parse_url' ) ) {
 		return parse_url( $url, $component );
 	}
 }
+
+if ( ! function_exists( '_n' ) ) {
+	/**
+	 * Plural translation shim.
+	 *
+	 * @param string $single Singular.
+	 * @param string $plural Plural.
+	 * @param int    $number Number.
+	 * @param string $domain Domain.
+	 * @return string
+	 */
+	function _n( $single, $plural, $number, $domain = 'default' ) { // phpcs:ignore
+		return 1 === (int) $number ? $single : $plural;
+	}
+}
+
+if ( ! function_exists( 'number_format_i18n' ) ) {
+	/**
+	 * Number formatting shim (en_US).
+	 *
+	 * @param float $number   Number.
+	 * @param int   $decimals Decimals.
+	 * @return string
+	 */
+	function number_format_i18n( $number, $decimals = 0 ) {
+		return number_format( (float) $number, (int) $decimals );
+	}
+}

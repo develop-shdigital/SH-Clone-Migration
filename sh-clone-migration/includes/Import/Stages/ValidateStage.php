@@ -98,6 +98,7 @@ class ValidateStage extends AbstractStage {
 				)
 			);
 
+			$this->describeContents( $job );
 			$this->checkCompatibility( $job, $manifest );
 
 			if ( ! $job->param( 'verify_archive', true ) ) {
@@ -144,6 +145,45 @@ class ValidateStage extends AbstractStage {
 				/* translators: %s: number of entries */
 				__( 'Archive verified (%s entries)', 'sh-clone-migration' ),
 				number_format_i18n( $state['checked'] )
+			)
+		);
+	}
+
+	/**
+	 * Log what the archive holds, as recorded when it was written, and its
+	 * SHA-256 when one is on file (compare it with the source's).
+	 *
+	 * @param Job $job Job.
+	 * @return void
+	 */
+	protected function describeContents( Job $job ) {
+		$path   = (string) $job->param( 'archive_path' );
+		$footer = Reader::readFooter( $path );
+		if ( is_array( $footer ) && isset( $footer['database'] ) && is_array( $footer['database'] ) ) {
+			$db = $footer['database'];
+			if ( empty( $db['included'] ) || empty( $db['tables'] ) ) {
+				$this->logger->warning( 'The archive does not contain a database; the database of this site will be left unchanged.' );
+			} else {
+				$this->logger->info(
+					sprintf(
+						'Archive contents: database with %1$d tables and %2$s rows (%3$s of SQL), %4$d file entries.',
+						(int) $db['tables'],
+						number_format( isset( $db['rows'] ) ? (int) $db['rows'] : 0 ),
+						Bytes::format( isset( $db['sql_bytes'] ) ? (int) $db['sql_bytes'] : 0 ),
+						isset( $footer['files'] ) ? (int) $footer['files'] : 0
+					)
+				);
+			}
+		}
+
+		$catalog = new \SHCM\Archive\Catalog( $this->storage );
+		$sha256  = $catalog->sha256( $path );
+		$this->logger->info(
+			sprintf(
+				'Archive file: %1$s, %2$s bytes%3$s.',
+				basename( $path ),
+				number_format( (int) @filesize( $path ) ),
+				'' !== $sha256 ? ', SHA-256 ' . $sha256 : ''
 			)
 		);
 	}
