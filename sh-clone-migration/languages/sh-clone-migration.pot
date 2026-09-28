@@ -2,14 +2,14 @@
 # This file is distributed under the GPL-2.0-or-later.
 msgid ""
 msgstr ""
-"Project-Id-Version: SH Clone Migration 1.0.1\n"
+"Project-Id-Version: SH Clone Migration 1.1.0\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/sh-clone-migration\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-24T09:53:17+00:00\n"
+"POT-Creation-Date: 2026-09-28T16:13:51+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: sh-clone-migration\n"
@@ -28,7 +28,7 @@ msgstr ""
 
 #. Description of the plugin
 #: sh-clone-migration.php
-msgid "Complete WordPress website cloning and migration system. Exports an entire site (database + files) into a single portable .wpress archive and restores it on any other WordPress installation."
+msgid "Complete WordPress website cloning and migration system. Exports an entire site (database + files) into a single portable .wpress archive and restores it on any other WordPress installation. Scheduled backups, optionally stored on your own Google Drive."
 msgstr ""
 
 #. Author of the plugin
@@ -36,52 +36,56 @@ msgstr ""
 msgid "SH"
 msgstr ""
 
-#: includes/Admin/Ajax.php:104
-#: includes/Admin/Ajax.php:277
+#: includes/Admin/Ajax.php:121
+#: includes/Admin/Ajax.php:336
 msgid "Unknown action."
 msgstr ""
 
-#: includes/Admin/Ajax.php:288
+#: includes/Admin/Ajax.php:347
+msgid "Scheduled backups are switched off on this site (SHCM_DISABLE_BACKUPS)."
+msgstr ""
+
+#: includes/Admin/Ajax.php:363
 msgid "No chunk was received. The server may have rejected the request size."
 msgstr ""
 
 #. translators: %d: PHP upload error code
-#: includes/Admin/Ajax.php:296
+#: includes/Admin/Ajax.php:371
 #, php-format
 msgid "The chunk upload failed with PHP error %d. Try a smaller chunk size in the settings."
 msgstr ""
 
-#: includes/Admin/Ajax.php:304
+#: includes/Admin/Ajax.php:379
 msgid "The uploaded chunk was rejected."
 msgstr ""
 
-#: includes/Admin/Ajax.php:338
+#: includes/Admin/Ajax.php:413
 msgid "Server side archives must be placed in the plugin storage directory or in the uploads directory."
 msgstr ""
 
-#: includes/Admin/Ajax.php:353
+#: includes/Admin/Ajax.php:428
 msgid "You do not have permission to download migration archives."
 msgstr ""
 
-#: includes/Admin/Ajax.php:360
-#: includes/Admin/Controller.php:443
-#: includes/Admin/Controller.php:486
+#: includes/Admin/Ajax.php:435
+#: includes/Admin/Controller.php:523
+#: includes/Admin/Controller.php:566
 msgid "That archive could not be found."
 msgstr ""
 
-#: includes/Admin/Ajax.php:368
+#: includes/Admin/Ajax.php:443
 msgid "This archive is incomplete: its export is still running or did not finish. Wait for the export to complete, or run it again."
 msgstr ""
 
-#: includes/Admin/Ajax.php:369
+#: includes/Admin/Ajax.php:444
 msgid "Archive incomplete"
 msgstr ""
 
-#: includes/Admin/Ajax.php:417
+#: includes/Admin/Ajax.php:492
 msgid "You do not have permission to download migration logs."
 msgstr ""
 
-#: includes/Admin/Ajax.php:424
+#: includes/Admin/Ajax.php:499
 msgid "That migration log could not be found."
 msgstr ""
 
@@ -135,39 +139,131 @@ msgid_plural "%s bytes"
 msgstr[0] ""
 msgstr[1] ""
 
+#: includes/Admin/BackupController.php:188
+msgid "The client ID and secret are set in wp-config.php and cannot be changed here."
+msgstr ""
+
+#: includes/Admin/BackupController.php:197
+msgid "That does not look like a Google OAuth client ID (it ends in .apps.googleusercontent.com)."
+msgstr ""
+
+#: includes/Admin/BackupController.php:202
+msgid "Enter the client secret of the new OAuth client."
+msgstr ""
+
+#: includes/Admin/BackupController.php:206
+msgid "Enter the client secret shown when the OAuth client was created."
+msgstr ""
+
+#: includes/Admin/BackupController.php:222
+msgid "Save the client ID and secret first."
+msgstr ""
+
+#: includes/Admin/BackupController.php:254
+msgid "The Google sign-in could not be matched to this session (it expired or was started elsewhere). Click Connect again."
+msgstr ""
+
+#: includes/Admin/BackupController.php:261
+msgid "Access to Google Drive was not granted."
+msgstr ""
+
+#. translators: %s: error code from Google
+#: includes/Admin/BackupController.php:263
+#, php-format
+msgid "Google reported an error: %s"
+msgstr ""
+
+#. translators: %s: Google account
+#: includes/Admin/BackupController.php:274
+#, php-format
+msgid "Google Drive is connected (%s)."
+msgstr ""
+
+#. translators: %s: Google account
+#: includes/Admin/BackupController.php:274
+msgid "account name not reported"
+msgstr ""
+
+#: includes/Admin/BackupController.php:304
+msgid "Disconnected here, but Google did not confirm that the access was removed. Remove \"SH Clone Migration\" (or your OAuth client's name) at https://myaccount.google.com/permissions."
+msgstr ""
+
+#: includes/Admin/BackupController.php:318
+#: includes/Backup/BackupManager.php:1052
+#: includes/Export/Stages/RemoteUploadStage.php:654
+msgid "Google Drive is not connected."
+msgstr ""
+
+#. translators: 1: account, 2: folder, 3: free space
+#: includes/Admin/BackupController.php:329
+#, php-format
+msgid "Connected as %1$s. Backups go to the folder \"%2$s\". Free space: %3$s."
+msgstr ""
+
+#: includes/Admin/BackupController.php:332
+#: includes/Core/Environment.php:228
+msgid "unlimited"
+msgstr ""
+
+#. translators: %s: date and time
+#: includes/Admin/BackupController.php:478
+#, php-format
+msgid "%s (any moment now)"
+msgstr ""
+
+#. translators: 1: date, 2: human time difference
+#: includes/Admin/BackupController.php:481
+#, php-format
+msgid "%1$s (in %2$s)"
+msgstr ""
+
 #: includes/Admin/Controller.php:69
 msgid "Archive encryption needs libsodium or OpenSSL, and neither is available on this server."
 msgstr ""
 
-#: includes/Admin/Controller.php:101
+#: includes/Admin/Controller.php:102
 msgid "The selected migration archive could not be found."
 msgstr ""
 
-#: includes/Admin/Controller.php:104
+#: includes/Admin/Controller.php:105
 msgid "Confirm that the destination site may be replaced before starting the restore."
 msgstr ""
 
-#: includes/Admin/Controller.php:110
+#: includes/Admin/Controller.php:111
 msgid "This archive is encrypted. Enter its migration password to restore it."
 msgstr ""
 
-#: includes/Admin/Controller.php:173
-#: includes/Admin/Controller.php:258
-#: includes/Admin/Controller.php:280
-#: includes/Admin/Controller.php:295
+#: includes/Admin/Controller.php:175
+#: includes/Admin/Controller.php:263
+#: includes/Admin/Controller.php:345
+#: includes/Admin/Controller.php:360
 msgid "That migration job no longer exists."
 msgstr ""
 
-#: includes/Admin/Controller.php:178
+#: includes/Admin/Controller.php:180
 msgid "That migration has no rollback point. It may have been skipped, or already cleaned up."
 msgstr ""
 
-#: includes/Admin/Controller.php:181
+#: includes/Admin/Controller.php:183
 msgid "The rollback point is not in the expected location."
 msgstr ""
 
-#: includes/Admin/Controller.php:465
+#. translators: %s: job id
+#: includes/Admin/Controller.php:300
+#, php-format
+msgid "A backup is running (job %s). Wait for it to finish, or cancel it on the Scheduled Backups screen, then try again."
+msgstr ""
+
+#: includes/Admin/Controller.php:378
+msgid "This backup is still running. Cancel it first."
+msgstr ""
+
+#: includes/Admin/Controller.php:545
 msgid "That archive could not be deleted."
+msgstr ""
+
+#: includes/Admin/DriveAuth.php:75
+msgid "You are not allowed to connect Google Drive."
 msgstr ""
 
 #: includes/Admin/FileSender.php:41
@@ -199,69 +295,594 @@ msgid "Backups"
 msgstr ""
 
 #: includes/Admin/Menu.php:85
+msgid "Scheduled Backups"
+msgstr ""
+
+#: includes/Admin/Menu.php:86
 #: includes/Admin/Views/tools.php:14
 msgid "Search &amp; Replace"
 msgstr ""
 
-#: includes/Admin/Menu.php:86
+#: includes/Admin/Menu.php:87
 #: includes/Admin/Views/settings.php:18
 msgid "Settings"
 msgstr ""
 
-#: includes/Admin/Menu.php:87
+#: includes/Admin/Menu.php:88
 msgid "System Status"
 msgstr ""
 
-#: includes/Admin/Menu.php:184
+#: includes/Admin/Menu.php:190
 msgid "This will replace this website's database and files with the contents of the archive. Existing data may be overwritten. Continue?"
 msgstr ""
 
-#: includes/Admin/Menu.php:185
+#: includes/Admin/Menu.php:191
 msgid "Delete this archive permanently?"
 msgstr ""
 
-#: includes/Admin/Menu.php:186
+#: includes/Admin/Menu.php:192
 msgid "Cancel this migration?"
 msgstr ""
 
-#: includes/Admin/Menu.php:187
-msgid "Uploading"
-msgstr ""
-
-#: includes/Admin/Menu.php:188
-msgid "Upload complete"
-msgstr ""
-
-#: includes/Admin/Menu.php:189
-msgid "Verifying"
-msgstr ""
-
-#: includes/Admin/Menu.php:190
-msgid "Archive verified"
-msgstr ""
-
-#: includes/Admin/Menu.php:191
-msgid "Failed"
-msgstr ""
-
-#: includes/Admin/Menu.php:192
-msgid "Connection problem, retrying"
-msgstr ""
-
 #: includes/Admin/Menu.php:193
-msgid "This archive is encrypted. Enter the migration password."
+msgid "Cancelling… (stopping after the current step)"
 msgstr ""
 
 #: includes/Admin/Menu.php:194
+#: includes/Admin/Menu.php:310
+msgid "Uploading"
+msgstr ""
+
+#: includes/Admin/Menu.php:195
+msgid "Upload complete"
+msgstr ""
+
+#: includes/Admin/Menu.php:196
+msgid "Verifying"
+msgstr ""
+
+#: includes/Admin/Menu.php:197
+msgid "Archive verified"
+msgstr ""
+
+#: includes/Admin/Menu.php:198
+#: includes/Admin/Menu.php:267
+msgid "Failed"
+msgstr ""
+
+#: includes/Admin/Menu.php:199
+msgid "Connection problem, retrying"
+msgstr ""
+
+#: includes/Admin/Menu.php:200
+msgid "This archive is encrypted. Enter the migration password."
+msgstr ""
+
+#: includes/Admin/Menu.php:201
 msgid "Something went wrong. Check the migration log for details."
 msgstr ""
 
+#: includes/Admin/Menu.php:202
+msgid "Saved."
+msgstr ""
+
+#: includes/Admin/Menu.php:203
+msgid "Disconnect Google Drive? Backups already on Google Drive stay there; new backups are kept on this server only."
+msgstr ""
+
+#: includes/Admin/Menu.php:204
+msgid "Backing up"
+msgstr ""
+
+#: includes/Admin/Menu.php:205
+msgid "Backup completed"
+msgstr ""
+
+#: includes/Admin/Menu.php:206
+msgid "Backup kept on this server, but not uploaded to Google Drive"
+msgstr ""
+
+#: includes/Admin/Menu.php:207
+msgid "Backup failed"
+msgstr ""
+
+#: includes/Admin/Menu.php:208
+msgid "Uploaded to Google Drive"
+msgstr ""
+
+#: includes/Admin/Menu.php:209
+msgid "Copied"
+msgstr ""
+
+#: includes/Admin/Menu.php:210
+msgid "The two passwords do not match."
+msgstr ""
+
+#: includes/Admin/Menu.php:211
+msgid "Upload a copy of this archive to Google Drive? The upload runs in the background; you can follow it on the Scheduled Backups screen."
+msgstr ""
+
+#: includes/Admin/Menu.php:214
+msgid "Tables"
+msgstr ""
+
+#: includes/Admin/Menu.php:215
+msgid "not included"
+msgstr ""
+
+#: includes/Admin/Menu.php:216
+msgid "Rows"
+msgstr ""
+
+#: includes/Admin/Menu.php:217
+#: includes/Admin/Menu.php:319
+msgid "Files"
+msgstr ""
+
+#: includes/Admin/Menu.php:218
+msgid "Source size"
+msgstr ""
+
+#: includes/Admin/Menu.php:219
+#: includes/Admin/Menu.php:268
+msgid "Skipped"
+msgstr ""
+
+#: includes/Admin/Menu.php:220
+#: includes/Admin/Views/backups.php:68
+#: includes/Admin/Views/export.php:131
+msgid "Archive"
+msgstr ""
+
+#. translators: 1: size, 2: number of bytes
+#: includes/Admin/Menu.php:222
+#, php-format
+msgid "%1$s (%2$s bytes)"
+msgstr ""
+
+#: includes/Admin/Menu.php:223
+msgid "Values updated"
+msgstr ""
+
+#. translators: 1: warnings shown, 2: total warnings
+#: includes/Admin/Menu.php:225
+#, php-format
+msgid "Showing the last %1$s of %2$s warnings. The migration log lists every one of them."
+msgstr ""
+
+#. translators: number of warnings
+#: includes/Admin/Menu.php:227
+#, php-format
+msgid "Warnings (%s)"
+msgstr ""
+
+#: includes/Admin/Menu.php:228
+msgid "Archive size"
+msgstr ""
+
+#. translators: number of bytes
+#: includes/Admin/Menu.php:230
+#, php-format
+msgid "exactly %s bytes"
+msgstr ""
+
+#: includes/Admin/Menu.php:231
+#: includes/Admin/Menu.php:318
+msgid "Database"
+msgstr ""
+
+#: includes/Admin/Menu.php:232
+msgid "NOT included in this archive"
+msgstr ""
+
+#: includes/Admin/Menu.php:233
+msgid "No tables were exported"
+msgstr ""
+
+#: includes/Admin/Menu.php:234
+msgid "Included"
+msgstr ""
+
+#. translators: 1: tables, 2: rows
+#: includes/Admin/Menu.php:236
+#, php-format
+msgid "%1$s tables, %2$s rows"
+msgstr ""
+
+#. translators: size
+#: includes/Admin/Menu.php:238
+#, php-format
+msgid "%s of SQL"
+msgstr ""
+
+#: includes/Admin/Menu.php:239
+msgid "table prefix"
+msgstr ""
+
+#. translators: number of files
+#: includes/Admin/Menu.php:241
+#, php-format
+msgid "%s skipped (see the warnings and the log)"
+msgstr ""
+
+#: includes/Admin/Menu.php:242
+msgid "Verification"
+msgstr ""
+
+#. translators: number of entries
+#: includes/Admin/Menu.php:244
+#, php-format
+msgid "The archive was read back and every one of its %s entries matched its checksum."
+msgstr ""
+
+#: includes/Admin/Menu.php:245
+msgid "Structure check only (quick mode in the settings); entry checksums were not read back."
+msgstr ""
+
+#: includes/Admin/Menu.php:246
+msgid "How to check the downloaded file"
+msgstr ""
+
+#. translators: number of bytes
+#: includes/Admin/Menu.php:248
+#, php-format
+msgid "The downloaded file must be exactly %s bytes. To check it:"
+msgstr ""
+
+#. translators: number of bytes
+#: includes/Admin/Menu.php:250
+#, php-format
+msgid "The downloaded file must be exactly %s bytes and its SHA-256 must be the one shown above. To compute it:"
+msgstr ""
+
+#: includes/Admin/Menu.php:251
+msgid "The import checks every entry again before it changes anything, so a damaged copy is always refused."
+msgstr ""
+
+#: includes/Admin/Menu.php:252
+msgid "This server may hide the file size from browsers and download managers (they then say the size is unknown and cannot resume). The download is still complete when its size and SHA-256 match. See System Status for the one-time server rule that fixes this."
+msgstr ""
+
+#: includes/Admin/Menu.php:255
+msgid "Paused"
+msgstr ""
+
+#. translators: %s: time until the next backup, e.g. "12 hours"
+#: includes/Admin/Menu.php:257
+#, php-format
+msgid "in %s"
+msgstr ""
+
+#: includes/Admin/Menu.php:258
+msgid "Any moment now"
+msgstr ""
+
+#: includes/Admin/Menu.php:259
+msgid "Cancel this backup?"
+msgstr ""
+
 #: includes/Admin/Menu.php:260
+msgid "Upload to Google Drive failed (the archive is still on this server)"
+msgstr ""
+
+#: includes/Admin/Menu.php:261
+msgid "The security keys in wp-config.php are missing or still the sample values, so the Google Drive tokens and the backup password are sealed with keys kept in the database, which is inside every backup. Add real keys to wp-config.php (or define SHCM_SECRET_KEY), then reconnect and enter the password again."
+msgstr ""
+
+#. translators: 1: schedule, e.g. "Daily at 03:15", 2: date and time of the next backup
+#: includes/Admin/Menu.php:263
+#, php-format
+msgid "%1$s · next %2$s"
+msgstr ""
+
+#: includes/Admin/Menu.php:264
+msgid "On demand"
+msgstr ""
+
+#: includes/Admin/Menu.php:265
+#: includes/Core/Environment.php:280
+#: includes/Core/Environment.php:529
+msgid "OK"
+msgstr ""
+
+#: includes/Admin/Menu.php:266
+msgid "Not uploaded"
+msgstr ""
+
+#: includes/Admin/Menu.php:269
+msgid "Cancelled"
+msgstr ""
+
+#: includes/Admin/Menu.php:270
+msgid "Running"
+msgstr ""
+
+#: includes/Admin/Menu.php:271
+msgid "Last backup"
+msgstr ""
+
+#: includes/Admin/Menu.php:272
+msgid "No backup yet"
+msgstr ""
+
+#: includes/Admin/Menu.php:273
+msgid "Kept on this server"
+msgstr ""
+
+#. translators: number of backups
+#: includes/Admin/Menu.php:275
+#, php-format
+msgid "%s on Drive"
+msgstr ""
+
+#: includes/Admin/Menu.php:276
+msgid "Reconnect"
+msgstr ""
+
+#: includes/Admin/Menu.php:277
+msgid "Not connected"
+msgstr ""
+
+#: includes/Admin/Menu.php:278
+#: includes/Admin/Menu.php:326
+#: includes/Admin/Views/schedules.php:203
+#: includes/Core/Environment.php:565
+msgid "Google Drive"
+msgstr ""
+
+#: includes/Admin/Menu.php:279
+msgid "Backups cover the whole network and are managed on the main site only."
+msgstr ""
+
+#: includes/Admin/Menu.php:280
+msgid "This schedule was set up on another copy of this site."
+msgstr ""
+
+#: includes/Admin/Menu.php:281
+msgid "The site was moved or cloned. Backups are paused here so that a copy never backs up into, or deletes from, the original site's storage."
+msgstr ""
+
+#: includes/Admin/Menu.php:282
+msgid "This is the same site: resume backups"
+msgstr ""
+
+#: includes/Admin/Menu.php:283
+msgid "Google Drive needs to be reconnected."
+msgstr ""
+
+#: includes/Admin/Menu.php:284
+msgid "The Google Drive connection belongs to another copy of this site. Confirm this is the same site, or disconnect and connect this site's own account."
+msgstr ""
+
+#: includes/Admin/Menu.php:285
+msgid "This is the same site"
+msgstr ""
+
+#: includes/Admin/Menu.php:286
+msgid "Backups are set to go to Google Drive, but Google Drive is not connected. They are kept on this server until it is."
+msgstr ""
+
+#: includes/Admin/Menu.php:287
+msgid "Encrypted backups are on, but no readable password is stored (wp-config.php may have changed). Enter the password again and save."
+msgstr ""
+
+#: includes/Admin/Menu.php:288
+msgid "The last scheduled backup is overdue. WP-Cron only runs when the site has visitors; see the note about a system cron job below."
+msgstr ""
+
+#. translators: a command
+#: includes/Admin/Menu.php:290
+#, php-format
+msgid "WP-Cron is disabled on this site (DISABLE_WP_CRON). Scheduled backups run only if a system cron job runs %s (or wp-cron.php) regularly."
+msgstr ""
+
+#: includes/Admin/Menu.php:291
+msgid "This site cannot call itself (loopback requests are blocked, for example by HTTP authentication). Backups still run, but only one step per minute through WP-Cron, so they take much longer."
+msgstr ""
+
+#: includes/Admin/Menu.php:292
+msgid "Account"
+msgstr ""
+
+#: includes/Admin/Menu.php:293
+msgid "Folder"
+msgstr ""
+
+#: includes/Admin/Menu.php:294
+msgid "Created at the first upload"
+msgstr ""
+
+#: includes/Admin/Menu.php:295
+#: includes/Admin/Views/system-status.php:94
+msgid "Storage"
+msgstr ""
+
+#. translators: 1: used space, 2: total space
+#: includes/Admin/Menu.php:297
+#, php-format
+msgid "%1$s used of %2$s"
+msgstr ""
+
+#. translators: used space
+#: includes/Admin/Menu.php:299
+#, php-format
+msgid "%s used"
+msgstr ""
+
+#: includes/Admin/Menu.php:300
+msgid "Test connection"
+msgstr ""
+
+#: includes/Admin/Menu.php:301
+msgid "Show backups on Drive"
+msgstr ""
+
+#: includes/Admin/Menu.php:302
+msgid "Disconnect"
+msgstr ""
+
+#: includes/Admin/Menu.php:303
+msgid "The connection stopped working."
+msgstr ""
+
+#: includes/Admin/Menu.php:304
+msgid "Connected on another copy of this site."
+msgstr ""
+
+#: includes/Admin/Menu.php:305
+msgid "Not connected. Follow the steps below once; afterwards backups upload automatically."
+msgstr ""
+
+#: includes/Admin/Menu.php:306
+msgid "Reconnect Google Drive"
+msgstr ""
+
+#: includes/Admin/Menu.php:307
+#: includes/Admin/Views/schedules.php:241
+msgid "Connect Google Drive"
+msgstr ""
+
+#: includes/Admin/Menu.php:308
+msgid "Uploaded"
+msgstr ""
+
+#: includes/Admin/Menu.php:309
+msgid "Open"
+msgstr ""
+
+#: includes/Admin/Menu.php:311
+msgid "Removed (retention)"
+msgstr ""
+
+#: includes/Admin/Menu.php:312
+msgid "Retry upload"
+msgstr ""
+
+#: includes/Admin/Menu.php:313
+msgid "No backups yet. Click \"Back Up Now\" or set a schedule."
+msgstr ""
+
+#: includes/Admin/Menu.php:314
+#: includes/Admin/Views/schedules.php:92
+msgid "Schedule"
+msgstr ""
+
+#: includes/Admin/Menu.php:315
+#: includes/Admin/Views/schedules.php:52
+msgid "Back up now"
+msgstr ""
+
+#: includes/Admin/Menu.php:316
+msgid "WP-CLI"
+msgstr ""
+
+#: includes/Admin/Menu.php:317
+msgid "Database + files"
+msgstr ""
+
+#: includes/Admin/Menu.php:320
+msgid "Date"
+msgstr ""
+
+#: includes/Admin/Menu.php:321
+msgid "Started by"
+msgstr ""
+
+#: includes/Admin/Menu.php:322
+#: includes/Admin/Views/backups.php:149
+msgid "Status"
+msgstr ""
+
+#: includes/Admin/Menu.php:323
+#: includes/Admin/Views/backups.php:70
+msgid "Contents"
+msgstr ""
+
+#: includes/Admin/Menu.php:324
+#: includes/Admin/Views/backups.php:71
+#: includes/Admin/Views/export.php:132
+msgid "Size"
+msgstr ""
+
+#: includes/Admin/Menu.php:325
+msgid "This server"
+msgstr ""
+
+#: includes/Admin/Menu.php:327
+msgid "Kept"
+msgstr ""
+
+#: includes/Admin/Menu.php:328
+#: includes/Admin/Views/backups.php:119
+#: includes/Admin/Views/export.php:157
+msgid "Download"
+msgstr ""
+
+#. translators: number of warnings
+#: includes/Admin/Menu.php:330
+#, php-format
+msgid "%s warning"
+msgstr ""
+
+#. translators: number of warnings
+#: includes/Admin/Menu.php:332
+#, php-format
+msgid "%s warnings"
+msgstr ""
+
+#: includes/Admin/Menu.php:333
+#: includes/Admin/Views/backups.php:82
+#: includes/Admin/Views/export.php:143
+#: includes/Admin/Views/import.php:114
+msgid "encrypted"
+msgstr ""
+
+#: includes/Admin/Menu.php:334
+#: includes/Admin/Views/backups.php:165
+msgid "Log"
+msgstr ""
+
+#: includes/Admin/Menu.php:335
+msgid "Uploaded to Google Drive and verified."
+msgstr ""
+
+#: includes/Admin/Menu.php:336
+#: includes/Backup/BackupManager.php:1324
+msgid "Cancelled."
+msgstr ""
+
+#. translators: date and time
+#: includes/Admin/Menu.php:338
+#, php-format
+msgid "Next backup: %s."
+msgstr ""
+
+#: includes/Admin/Menu.php:339
+msgid "No backups of this site on Google Drive yet."
+msgstr ""
+
+#: includes/Admin/Menu.php:340
+msgid "Name"
+msgstr ""
+
+#: includes/Admin/Menu.php:341
+msgid "sent by hand"
+msgstr ""
+
+#: includes/Admin/Menu.php:342
+msgid "Open in Drive"
+msgstr ""
+
+#: includes/Admin/Menu.php:343
+msgid "To restore one of these, download it from Google Drive and upload it on the Import screen."
+msgstr ""
+
+#: includes/Admin/Menu.php:419
 msgid "You do not have permission to manage migrations on this site."
 msgstr ""
 
 #. translators: %s: free disk space
-#: includes/Admin/Menu.php:298
+#: includes/Admin/Menu.php:457
 #, php-format
 msgid "Free disk space: %s"
 msgstr ""
@@ -285,133 +906,117 @@ msgid "Job %1$s stopped at %2$s%%."
 msgstr ""
 
 #: includes/Admin/Notices.php:87
-#: includes/Admin/Views/backups.php:145
+#: includes/Admin/Views/backups.php:174
 msgid "Resume"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:21
+#: includes/Admin/Views/backups.php:33
 msgid "Migration backups"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:22
+#: includes/Admin/Views/backups.php:34
 msgid "Every archive this installation has produced or received."
 msgstr ""
 
-#: includes/Admin/Views/backups.php:29
-#: includes/Admin/Views/backups.php:48
+#: includes/Admin/Views/backups.php:41
+#: includes/Admin/Views/backups.php:60
 msgid "Archives"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:33
+#: includes/Admin/Views/backups.php:45
 msgid "Space used"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:37
+#: includes/Admin/Views/backups.php:49
 #: includes/Core/Environment.php:239
 msgid "Free disk space"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:43
+#: includes/Admin/Views/backups.php:55
 msgid "Less than 1 GB of disk space is left. Delete old archives before creating another one."
 msgstr ""
 
-#: includes/Admin/Views/backups.php:50
+#: includes/Admin/Views/backups.php:62
 msgid "No archives stored on this server."
 msgstr ""
 
-#: includes/Admin/Views/backups.php:56
-#: includes/Admin/Views/export.php:131
-msgid "Archive"
-msgstr ""
-
-#: includes/Admin/Views/backups.php:57
+#: includes/Admin/Views/backups.php:69
 msgid "Source"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:58
-msgid "Contents"
-msgstr ""
-
-#: includes/Admin/Views/backups.php:59
-#: includes/Admin/Views/export.php:132
-msgid "Size"
-msgstr ""
-
-#: includes/Admin/Views/backups.php:60
+#: includes/Admin/Views/backups.php:72
 #: includes/Admin/Views/export.php:133
 msgid "Created"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:70
-#: includes/Admin/Views/export.php:143
-#: includes/Admin/Views/import.php:114
-msgid "encrypted"
-msgstr ""
-
-#: includes/Admin/Views/backups.php:73
+#: includes/Admin/Views/backups.php:85
 #: includes/Admin/Views/export.php:146
 #: includes/Admin/Views/import.php:117
 msgid "incomplete"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:86
+#: includes/Admin/Views/backups.php:91
+msgid "scheduled backup"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:91
+msgid "backup"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:94
+msgid "on Google Drive"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:107
 msgid "SHA-256:"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:87
+#: includes/Admin/Views/backups.php:108
 msgid "Compare with: sha256sum <file> (Linux/macOS: shasum -a 256) or Get-FileHash <file> -Algorithm SHA256 (Windows PowerShell)"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:98
-#: includes/Admin/Views/export.php:157
-msgid "Download"
-msgstr ""
-
-#: includes/Admin/Views/backups.php:101
+#: includes/Admin/Views/backups.php:122
 msgid "Still being written, or the export did not finish"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:103
+#: includes/Admin/Views/backups.php:124
 msgid "Verify"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:104
+#: includes/Admin/Views/backups.php:126
+msgid "Send to Google Drive"
+msgstr ""
+
+#: includes/Admin/Views/backups.php:128
 msgid "Delete"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:115
+#: includes/Admin/Views/backups.php:139
 msgid "Migration jobs"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:117
+#: includes/Admin/Views/backups.php:141
 msgid "No migration jobs recorded."
 msgstr ""
 
-#: includes/Admin/Views/backups.php:123
+#: includes/Admin/Views/backups.php:147
 msgid "Job"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:124
+#: includes/Admin/Views/backups.php:148
 msgid "Type"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:125
-msgid "Status"
-msgstr ""
-
-#: includes/Admin/Views/backups.php:126
+#: includes/Admin/Views/backups.php:150
+#: includes/Admin/Views/backups.php:170
 msgid "Progress"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:127
+#: includes/Admin/Views/backups.php:151
 msgid "Updated"
 msgstr ""
 
-#: includes/Admin/Views/backups.php:141
-msgid "Log"
-msgstr ""
-
-#: includes/Admin/Views/backups.php:148
+#: includes/Admin/Views/backups.php:178
 msgid "Remove"
 msgstr ""
 
@@ -479,6 +1084,7 @@ msgstr ""
 
 #: includes/Admin/Views/export.php:95
 #: includes/Admin/Views/import.php:186
+#: includes/Admin/Views/schedules.php:68
 #: includes/Admin/Views/tools.php:45
 msgid "Cancel"
 msgstr ""
@@ -615,7 +1221,7 @@ msgid "Create a rollback point of the current database first"
 msgstr ""
 
 #: includes/Admin/Views/import.php:157
-#: includes/Admin/Views/settings.php:126
+#: includes/Admin/Views/settings.php:127
 msgid "Rewrite the source URL to the destination URL"
 msgstr ""
 
@@ -649,6 +1255,293 @@ msgstr ""
 
 #: includes/Admin/Views/import.php:184
 msgid "Restoring..."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:22
+#: includes/Backup/Schedule.php:243
+msgid "Sunday"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:23
+#: includes/Backup/Schedule.php:244
+msgid "Monday"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:24
+#: includes/Backup/Schedule.php:245
+msgid "Tuesday"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:25
+#: includes/Backup/Schedule.php:246
+msgid "Wednesday"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:26
+#: includes/Backup/Schedule.php:247
+msgid "Thursday"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:27
+#: includes/Backup/Schedule.php:248
+msgid "Friday"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:28
+#: includes/Backup/Schedule.php:249
+msgid "Saturday"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:33
+#: includes/Core/Environment.php:555
+msgid "Scheduled backups"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:34
+msgid "Automatic backups on a schedule, kept on this server and, if you like, on your Google Drive."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:54
+msgid "Makes a backup straight away with the settings below. It keeps running in the background if you leave this page."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:56
+msgid "Back Up Now"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:59
+msgid "Also upload to Google Drive"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:66
+msgid "Backing up..."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:81
+msgid "Backup log"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:95
+msgid "Frequency"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:98
+#: includes/Backup/Schedule.php:213
+msgid "Only on demand"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:99
+msgid "Daily"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:100
+msgid "Weekly"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:101
+msgid "Monthly"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:104
+msgid "on"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:112
+msgid "on day"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:117
+msgid "last day"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:121
+#: includes/Admin/Views/schedules.php:190
+msgid "at"
+msgstr ""
+
+#. translators: %s: timezone name
+#: includes/Admin/Views/schedules.php:128
+#, php-format
+msgid "Times are in the site timezone (%s), set under Settings → General."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:136
+msgid "What to back up"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:139
+msgid "Database and files"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:140
+msgid "Database only"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:141
+msgid "Files only"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:143
+msgid "Include WordPress core files (wp-admin, wp-includes)"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:145
+msgid "Also exclude (one pattern per line, e.g. wp-content/uploads/videos or *.log)"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:151
+msgid "Where to keep backups"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:154
+#: includes/Admin/Views/schedules.php:162
+msgid "Keep the newest"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:156
+msgid "backups on this server"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:159
+msgid "Store backups on Google Drive"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:164
+msgid "backups on Google Drive"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:166
+msgid "Only backups count: manual exports are never deleted. With Google Drive, \"0 on this server\" deletes each backup here once its copy on Google Drive has been verified; a backup whose upload failed is always kept here."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:170
+msgid "Encryption"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:172
+msgid "Encrypt backups with a password"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:175
+msgid "Password stored (leave empty to keep it)"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:175
+msgid "Password"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:176
+msgid "Repeat the password"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:178
+msgid "Recommended when backups leave the server. The password is stored encrypted with the keys in wp-config.php so that backups can run unattended. Write it down: without it a backup cannot be restored, and if wp-config.php changes you will be asked for it again."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:183
+msgid "E-mail me"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:186
+msgid "When a backup fails or is not uploaded"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:187
+msgid "After every backup"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:188
+msgid "Never"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:196
+msgid "Save Schedule"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:210
+msgid "How to connect your Google Drive (about 5 minutes, once)"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:211
+msgid "Backups go to your own Google account through your own Google Cloud project, so no third party ever sees them. The plugin only gets access to the files it creates itself."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:213
+msgid "Open the <a href=\"https://console.cloud.google.com/projectcreate\" target=\"_blank\" rel=\"noopener noreferrer\">Google Cloud console</a> and create a project (any name)."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:214
+msgid "Enable the <a href=\"https://console.cloud.google.com/apis/library/drive.googleapis.com\" target=\"_blank\" rel=\"noopener noreferrer\">Google Drive API</a> for the project."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:215
+msgid "Under \"Google Auth Platform\", fill in Branding (an app name and your e-mail; do not upload a logo), choose the audience \"External\", and add the scope .../auth/drive.file under Data Access."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:216
+msgid "Under Audience, click \"Publish app\" (status \"In production\")."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:216
+msgid "In \"Testing\" status Google stops the access after 7 days and backups would stop uploading. The drive.file scope needs no verification by Google."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:218
+msgid "Under Clients, create an OAuth client of type \"Web application\" with this authorized redirect URI:"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:221
+msgid "Copy"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:224
+msgid "Copy the client ID and the client secret (Google shows the secret in full only once), paste them below and click Connect."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:227
+msgid "Google only accepts HTTPS redirect URIs (except for localhost). This site is not using HTTPS, so connecting will fail until it does."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:233
+msgid "Client ID"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:237
+msgid "Client secret"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:238
+msgid "Set in wp-config.php"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:238
+msgid "Stored (leave empty to keep it)"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:243
+msgid "The client ID and secret come from wp-config.php (SHCM_GDRIVE_CLIENT_ID / SHCM_GDRIVE_CLIENT_SECRET)."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:245
+msgid "The client ID comes from wp-config.php (SHCM_GDRIVE_CLIENT_ID)."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:247
+msgid "The client secret comes from wp-config.php (SHCM_GDRIVE_CLIENT_SECRET)."
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:255
+msgid "Backups on Google Drive"
+msgstr ""
+
+#: includes/Admin/Views/schedules.php:261
+msgid "History"
+msgstr ""
+
+#. translators: %s: WP-CLI command
+#: includes/Admin/Views/schedules.php:267
+#, php-format
+msgid "Backups rely on WP-Cron, which runs when someone visits the site. For exact timing on quiet sites, add a system cron job that runs %s every 5 minutes."
 msgstr ""
 
 #: includes/Admin/Views/settings.php:19
@@ -767,87 +1660,91 @@ msgstr ""
 msgid "Let WP-Cron continue a migration when the browser tab is closed"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:116
+#: includes/Admin/Views/settings.php:112
+msgid "Scheduled backups always run in the background, whatever this setting says."
+msgstr ""
+
+#: includes/Admin/Views/settings.php:117
 msgid "Restore behaviour"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:119
+#: includes/Admin/Views/settings.php:120
 msgid "Safety"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:122
+#: includes/Admin/Views/settings.php:123
 msgid "Snapshot the current database before replacing it"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:124
+#: includes/Admin/Views/settings.php:125
 msgid "Put the site in maintenance mode during a restore"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:128
+#: includes/Admin/Views/settings.php:129
 msgid "Rewrite absolute server paths as well"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:130
+#: includes/Admin/Views/settings.php:131
 msgid "Reactivate the plugins that were active on the source"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:134
+#: includes/Admin/Views/settings.php:135
 msgid "Archive verification"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:137
+#: includes/Admin/Views/settings.php:138
 msgid "Full: recompute every checksum"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:138
+#: includes/Admin/Views/settings.php:139
 msgid "Quick: structure and manifest only"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:144
+#: includes/Admin/Views/settings.php:145
 msgid "Housekeeping"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:147
+#: includes/Admin/Views/settings.php:148
 msgid "Keep jobs and logs for"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:150
+#: includes/Admin/Views/settings.php:151
 msgid "days. 0 keeps them forever. Archives are never deleted by this setting."
 msgstr ""
 
-#: includes/Admin/Views/settings.php:154
+#: includes/Admin/Views/settings.php:155
 msgid "Maximum stored archives"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:157
-msgid "0 keeps every archive."
+#: includes/Admin/Views/settings.php:158
+msgid "manual exports and uploaded archives; 0 keeps every archive. Scheduled backups follow their own limits on the Scheduled Backups screen."
 msgstr ""
 
-#: includes/Admin/Views/settings.php:161
+#: includes/Admin/Views/settings.php:162
 msgid "Delete temporary files after"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:164
+#: includes/Admin/Views/settings.php:165
 msgid "hours"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:168
+#: includes/Admin/Views/settings.php:169
 msgid "Log level"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:178
+#: includes/Admin/Views/settings.php:179
 msgid "Uninstall"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:181
+#: includes/Admin/Views/settings.php:182
 msgid "Delete this plugin's settings, jobs, logs and archives when it is uninstalled"
 msgstr ""
 
-#: includes/Admin/Views/settings.php:182
+#: includes/Admin/Views/settings.php:183
 msgid "Website content is never touched by the uninstaller, whatever this is set to."
 msgstr ""
 
-#: includes/Admin/Views/settings.php:188
+#: includes/Admin/Views/settings.php:189
 msgid "Save Settings"
 msgstr ""
 
@@ -932,10 +1829,6 @@ msgstr ""
 
 #: includes/Admin/Views/system-status.php:89
 msgid "Nothing in this list is mandatory. The engine falls back to pure PHP streaming, which works on standard shared hosting without shell access."
-msgstr ""
-
-#: includes/Admin/Views/system-status.php:94
-msgid "Storage"
 msgstr ""
 
 #: includes/Admin/Views/system-status.php:99
@@ -1039,6 +1932,192 @@ msgstr ""
 msgid "The archive digest does not match its contents: the archive is incomplete or has been modified."
 msgstr ""
 
+#: includes/Backup/BackupManager.php:374
+msgid "Enter the password for encrypted backups (and keep it safe: without it the backups cannot be restored)."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:377
+msgid "Connect Google Drive first, or switch off \"Store backups on Google Drive\"."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:431
+msgid "Backups cover the whole network and are managed on the main site only. Open this screen on the main site."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:516
+msgid "Scheduled backups are paused: this installation is not the one that set them up (the site was moved, copied or its address changed). Confirm on the Scheduled Backups screen that this is the same site."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:644
+msgid "Scheduled backups are paused: this installation is not the one that set them up. Confirm on the Scheduled Backups screen that this is the same site."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:718
+msgid "The scheduled backup could not start: its settings could not be saved (is the disk full?)."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:872
+#: includes/Backup/BackupManager.php:918
+msgid "The site is in maintenance mode (a restore is running)."
+msgstr ""
+
+#. translators: 1: job id, 2: human time difference
+#: includes/Backup/BackupManager.php:891
+#, php-format
+msgid "A restore or search & replace is in progress (job %1$s, last active %2$s ago)."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:900
+msgid "The previous backup is still running."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:926
+msgid "A restore or search & replace is in progress."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:967
+msgid "Google Drive is not connected. Connect it on the Scheduled Backups screen, or back up to this server only."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:985
+msgid "Encrypted backups are switched on but no password is stored (the site keys in wp-config.php may have changed). Enter the password again on the Scheduled Backups screen."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:988
+msgid "Encryption needs the sodium or OpenSSL PHP extension."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:1046
+msgid "Archive not found."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:1049
+msgid "This archive is incomplete and cannot be uploaded."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:1056
+msgid "This archive is already being uploaded."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:1197
+msgid "The backup was not uploaded to Google Drive."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:1240
+msgid "The backup failed."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:1316
+#: includes/Backup/BackupManager.php:1351
+msgid "Upload cancelled."
+msgstr ""
+
+#: includes/Backup/BackupManager.php:1380
+msgid "The upload did not run."
+msgstr ""
+
+#. translators: 1: file path, 2: system user name
+#: includes/Backup/ConfigStore.php:148
+#, php-format
+msgid "%1$s cannot be read by the web server (it belongs to %2$s). Run WP-CLI as the web server user, or make the file readable for it."
+msgstr ""
+
+#. translators: %s: file path
+#: includes/Backup/ConfigStore.php:155
+#, php-format
+msgid "%s is damaged and cannot be read. Save the settings on the Scheduled Backups screen again to replace it."
+msgstr ""
+
+#. translators: 1: directory path, 2: system user name
+#: includes/Backup/ConfigStore.php:163
+#, php-format
+msgid "%1$s is not writable by the web server (it belongs to %2$s), so settings cannot be saved."
+msgstr ""
+
+#. translators: %s: time of day on a 24-hour clock, e.g. 03:00
+#: includes/Backup/Schedule.php:197
+#, php-format
+msgid "Daily at %s"
+msgstr ""
+
+#. translators: 1: weekday name, 2: time of day on a 24-hour clock, e.g. 03:00
+#: includes/Backup/Schedule.php:202
+#, php-format
+msgid "Weekly on %1$s at %2$s"
+msgstr ""
+
+#. translators: %s: time of day on a 24-hour clock, e.g. 03:00
+#: includes/Backup/Schedule.php:207
+#, php-format
+msgid "Monthly on the last day at %s"
+msgstr ""
+
+#. translators: 1: day of the month (1 to 28), 2: time of day on a 24-hour clock, e.g. 03:00
+#: includes/Backup/Schedule.php:210
+#, php-format
+msgid "Monthly on day %1$d at %2$s"
+msgstr ""
+
+#: includes/Backup/Schedule.php:594
+msgid "Choose how often backups run: only on demand, daily, weekly or monthly."
+msgstr ""
+
+#: includes/Backup/Schedule.php:597
+msgid "Enter the backup time as HH:MM on a 24-hour clock (00:00 to 23:59)."
+msgstr ""
+
+#: includes/Backup/Schedule.php:600
+msgid "Choose the weekday for weekly backups."
+msgstr ""
+
+#: includes/Backup/Schedule.php:603
+msgid "Choose a day of the month from 1 to 28, or the last day of the month."
+msgstr ""
+
+#: includes/Backup/Schedule.php:606
+msgid "Choose what to back up: the database and files, the database only, or the files only."
+msgstr ""
+
+#: includes/Backup/Schedule.php:609
+msgid "Choose whether to include the WordPress core files."
+msgstr ""
+
+#: includes/Backup/Schedule.php:612
+msgid "Choose whether to store backups on Google Drive."
+msgstr ""
+
+#: includes/Backup/Schedule.php:615
+msgid "Choose whether to encrypt backups."
+msgstr ""
+
+#: includes/Backup/Schedule.php:618
+msgid "Enter the exclusions as a list of patterns, one per line."
+msgstr ""
+
+#: includes/Backup/Schedule.php:621
+msgid "Enter how many backups to keep on this server (a number from 0 to 100)."
+msgstr ""
+
+#: includes/Backup/Schedule.php:624
+msgid "Enter how many backups to keep on Google Drive (a number from 1 to 1000)."
+msgstr ""
+
+#: includes/Backup/Schedule.php:627
+msgid "Choose when to send e-mail: when a backup fails, after every backup, or never."
+msgstr ""
+
+#: includes/Backup/Schedule.php:630
+msgid "Enter a valid e-mail address for notifications, or leave the field empty to use the site admin address."
+msgstr ""
+
+#: includes/Backup/Schedule.php:633
+msgid "Keep at least one backup on this server, or store backups on Google Drive."
+msgstr ""
+
+#: includes/Backup/Schedule.php:636
+msgid "The schedule settings are invalid."
+msgstr ""
+
 #: includes/Core/Environment.php:199
 msgid "WordPress version"
 msgstr ""
@@ -1071,10 +2150,6 @@ msgstr ""
 msgid "Max execution time"
 msgstr ""
 
-#: includes/Core/Environment.php:228
-msgid "unlimited"
-msgstr ""
-
 #: includes/Core/Environment.php:231
 msgid "Upload max filesize"
 msgstr ""
@@ -1085,7 +2160,7 @@ msgstr ""
 
 #: includes/Core/Environment.php:240
 #: includes/Core/Environment.php:244
-#: includes/Filesystem/Storage.php:223
+#: includes/Filesystem/Storage.php:275
 msgid "unknown"
 msgstr ""
 
@@ -1160,10 +2235,6 @@ msgid "Database connection"
 msgstr ""
 
 #: includes/Core/Environment.php:280
-msgid "OK"
-msgstr ""
-
-#: includes/Core/Environment.php:280
 msgid "FAILED"
 msgstr ""
 
@@ -1171,101 +2242,242 @@ msgstr ""
 msgid "Archive downloads"
 msgstr ""
 
-#: includes/Core/Environment.php:322
+#: includes/Core/Environment.php:323
 msgid "exact size sent (checked with a test download)"
 msgstr ""
 
 #. translators: %s: what the test download received
-#: includes/Core/Environment.php:330
+#: includes/Core/Environment.php:331
 #, php-format
 msgid "the server removes the size (test download: %s)"
 msgstr ""
 
-#: includes/Core/Environment.php:337
+#: includes/Core/Environment.php:338
 msgid "not checked from the command line (open System Status in the browser)"
 msgstr ""
 
-#: includes/Core/Environment.php:344
+#: includes/Core/Environment.php:345
 msgid "the server probably removes the size (.htaccess rule missing, test download not possible)"
 msgstr ""
 
 #. translators: %s: error
-#: includes/Core/Environment.php:352
+#: includes/Core/Environment.php:353
 #, php-format
 msgid "not checked: the test download failed (%s)"
 msgstr ""
 
-#: includes/Core/Environment.php:353
+#: includes/Core/Environment.php:354
 msgid "not checked yet"
 msgstr ""
 
-#: includes/Core/Environment.php:367
+#: includes/Core/Environment.php:368
 msgid "Archive downloads lose their size on this server, so download managers report \"file size unknown\" and cannot resume. The archive itself is still complete: compare its size in bytes and its SHA-256."
 msgstr ""
 
-#: includes/Core/Environment.php:372
+#: includes/Core/Environment.php:373
 msgid "This is not Apache. On nginx, make sure gzip_types does not include application/octet-stream; behind a proxy or CDN, make sure it does not compress downloads."
 msgstr ""
 
-#: includes/Core/Environment.php:378
+#: includes/Core/Environment.php:379
 msgid "The rule the plugin added to .htaccess is not applied by this server (for example AllowOverride None, or PHP proxied with ProxyPassMatch). Ask your host to add this line to the server configuration (virtual host):"
 msgstr ""
 
 #. translators: %s: .htaccess path
-#: includes/Core/Environment.php:383
+#: includes/Core/Environment.php:384
 #, php-format
 msgid "The plugin could not add its rule to %s. Add these lines at the top of that file (or ask your host to add the single line after them to the server configuration):"
 msgstr ""
 
-#: includes/Core/Environment.php:390
+#: includes/Core/Environment.php:391
 msgid "This site does not use .htaccess rewrite rules, so the plugin does not add any. Ask your host to add this line to the server configuration (virtual host):"
 msgstr ""
 
 #. translators: %s: memory limit
-#: includes/Core/Environment.php:416
+#: includes/Core/Environment.php:417
 #, php-format
 msgid "PHP memory limit is low (%s). The migration engine streams data and stays well below it, but raising it to 256M gives more headroom."
 msgstr ""
 
 #. translators: %s: directory path
-#: includes/Core/Environment.php:426
+#: includes/Core/Environment.php:427
 #, php-format
 msgid "The storage directory is not writable: %s"
 msgstr ""
 
-#: includes/Core/Environment.php:438
+#: includes/Core/Environment.php:439
 msgid "wp-content is not writable, so files cannot be restored on this server."
 msgstr ""
 
-#: includes/Core/Environment.php:444
+#: includes/Core/Environment.php:445
 msgid "zlib is unavailable, archives will be stored uncompressed. Migration still works."
 msgstr ""
 
-#: includes/Core/Environment.php:450
+#: includes/Core/Environment.php:451
 msgid "Neither libsodium nor OpenSSL is available, so archive encryption is disabled on this server."
 msgstr ""
 
 #. translators: %s: upload limit
-#: includes/Core/Environment.php:458
+#: includes/Core/Environment.php:459
 #, php-format
 msgid "Browser upload limit is %s. Large archives are uploaded in chunks below that limit, so this does not cap the archive size."
 msgstr ""
 
 #. translators: 1: free space, 2: estimated archive size
-#: includes/Core/Environment.php:470
+#: includes/Core/Environment.php:471
 #, php-format
 msgid "Available disk space (%1$s) may not be sufficient for an archive of this site (rough estimate %2$s)."
 msgstr ""
 
 #. translators: %s: directory path
-#: includes/Core/Environment.php:483
+#: includes/Core/Environment.php:484
 #, php-format
 msgid "The storage directory is readable over HTTP on this server, which means a migration archive could be downloaded by anyone who knows its file name. Archive names are random, but you should still block %s in your web server configuration. The documentation contains an nginx snippet."
 msgstr ""
 
-#: includes/Core/Environment.php:492
+#: includes/Core/Environment.php:493
 msgid "open_basedir is active. Only paths inside the allowed list can be migrated."
 msgstr ""
+
+#. translators: %s: date
+#: includes/Core/Environment.php:527
+#, php-format
+msgid "next run %s"
+msgstr ""
+
+#: includes/Core/Environment.php:530
+msgid "not uploaded"
+msgstr ""
+
+#: includes/Core/Environment.php:531
+msgid "failed"
+msgstr ""
+
+#: includes/Core/Environment.php:532
+msgid "skipped"
+msgstr ""
+
+#: includes/Core/Environment.php:533
+msgid "cancelled"
+msgstr ""
+
+#. translators: 1: outcome (OK, failed, ...), 2: date
+#: includes/Core/Environment.php:540
+#, php-format
+msgid "last run %1$s %2$s"
+msgstr ""
+
+#: includes/Core/Environment.php:547
+msgid "not set up"
+msgstr ""
+
+#: includes/Core/Environment.php:548
+msgid "not connected"
+msgstr ""
+
+#: includes/Core/Environment.php:549
+msgid "connected"
+msgstr ""
+
+#: includes/Core/Environment.php:550
+msgid "needs to be reconnected"
+msgstr ""
+
+#: includes/Core/Environment.php:551
+msgid "belongs to another copy of this site"
+msgstr ""
+
+#: includes/Core/Environment.php:559
+msgid "WP-Cron"
+msgstr ""
+
+#: includes/Core/Environment.php:561
+msgid "disabled (DISABLE_WP_CRON): run \"wp shcm backup run\" from a system cron job"
+msgstr ""
+
+#: includes/Core/Environment.php:562
+msgid "enabled, but loopback requests are blocked (backups advance once a minute)"
+msgstr ""
+
+#: includes/Core/Environment.php:562
+msgid "enabled"
+msgstr ""
+
+#: includes/Core/Environment.php:586
+msgid "The security keys in wp-config.php are missing or still the sample values, so the Google Drive tokens and the backup password are sealed with keys kept in the database, which is inside every backup. Add real keys to wp-config.php (or define SHCM_SECRET_KEY), then reconnect Google Drive and enter the backup password again."
+msgstr ""
+
+#: includes/Core/Environment.php:592
+msgid "Scheduled backups:"
+msgstr ""
+
+#: includes/Core/Environment.php:598
+msgid "Google Drive needs to be reconnected on the Scheduled Backups screen; backups are not being uploaded."
+msgstr ""
+
+#: includes/Core/Environment.php:604
+msgid "Scheduled backups are paused: they were set up on another copy of this site. Confirm on the Scheduled Backups screen."
+msgstr ""
+
+#: includes/Core/Environment.php:611
+msgid "The last backup failed. See the Scheduled Backups screen and its log."
+msgstr ""
+
+#: includes/Core/Environment.php:612
+msgid "The last backup was not uploaded to Google Drive. See the Scheduled Backups screen."
+msgstr ""
+
+#: includes/Core/Environment.php:618
+msgid "A scheduled backup is overdue. WP-Cron runs only when the site has visitors; a system cron job running \"wp shcm backup run\" makes backups punctual."
+msgstr ""
+
+#: includes/Core/Environment.php:624
+msgid "Encrypted backups are on, but the stored password cannot be read (wp-config.php changed?). Enter it again on the Scheduled Backups screen."
+msgstr ""
+
+#: includes/Core/Environment.php:630
+msgid "WP-Cron is disabled (DISABLE_WP_CRON). Scheduled backups need a system cron job that runs \"wp shcm backup run\" or wp-cron.php."
+msgstr ""
+
+#: includes/Core/Environment.php:638
+msgid "WP_HTTP_BLOCK_EXTERNAL blocks Google: add *.googleapis.com to WP_ACCESSIBLE_HOSTS, or backups cannot be uploaded to Google Drive."
+msgstr ""
+
+#: includes/Export/Stages/BackupRetentionStage.php:68
+msgid "Removing old backups"
+msgstr ""
+
+#: includes/Export/Stages/BackupRetentionStage.php:92
+#: includes/Export/Stages/BackupRetentionStage.php:123
+msgid "Retention applied"
+msgstr ""
+
+#. translators: %s: error message
+#: includes/Export/Stages/BackupRetentionStage.php:145
+#, php-format
+msgid "Old backups on Google Drive were not cleaned up: %s"
+msgstr ""
+
+#. translators: 1: file name, 2: error message
+#: includes/Export/Stages/BackupRetentionStage.php:207
+#, php-format
+msgid "An old backup on Google Drive could not be deleted (%1$s): %2$s"
+msgstr ""
+
+#. translators: %d: number of backups
+#: includes/Export/Stages/BackupRetentionStage.php:305
+#, php-format
+msgid "%d older backup exists only on this server because it was not uploaded to Google Drive; it was not deleted. Retry its upload from the history."
+msgid_plural "%d older backups exist only on this server because they were not uploaded to Google Drive; they were not deleted. Retry their uploads from the history."
+msgstr[0] ""
+msgstr[1] ""
+
+#. translators: %d: number of backups
+#: includes/Export/Stages/BackupRetentionStage.php:314
+#, php-format
+msgid "%d older backup was made before Google Drive was used and has no copy there; it was kept although \"0 on this server\" is set. Delete it on the Backups screen when you no longer need it."
+msgid_plural "%d older backups were made before Google Drive was used and have no copy there; they were kept although \"0 on this server\" is set. Delete them on the Backups screen when you no longer need them."
+msgstr[0] ""
+msgstr[1] ""
 
 #: includes/Export/Stages/DatabaseStage.php:86
 msgid "Exporting the database"
@@ -1375,6 +2587,147 @@ msgstr ""
 
 #: includes/Export/Stages/InitializeStage.php:136
 msgid "Environment checked"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:91
+msgid "Uploading to Google Drive"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:124
+msgid "Upload finished"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:180
+msgid "Waiting for Google Drive to report the checksum"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:186
+#: includes/Export/Stages/RemoteUploadStage.php:192
+msgid "Uploaded to Google Drive and verified"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:210
+msgid "The archive to upload is missing."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:213
+msgid "The archive is incomplete and was not uploaded."
+msgstr ""
+
+#. translators: 1: free space, 2: archive size
+#: includes/Export/Stages/RemoteUploadStage.php:241
+#, php-format
+msgid "Not enough space on Google Drive: %1$s free, %2$s needed."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:249
+msgid "The archive is larger than Google Drive accepts for a single file."
+msgstr ""
+
+#. translators: 1: site, 2: date
+#: includes/Export/Stages/RemoteUploadStage.php:302
+#, php-format
+msgid "Backup of %1$s made by SH Clone Migration on %2$s."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:361
+msgid "The archive changed or disappeared during the upload."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:397
+msgid "Google Drive keeps refusing the upload data."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:415
+msgid "Google Drive did not return the uploaded file."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:422
+msgid "The uploaded file vanished from Google Drive."
+msgstr ""
+
+#. translators: 1: bytes on Drive, 2: bytes locally
+#: includes/Export/Stages/RemoteUploadStage.php:431
+#, php-format
+msgid "Google Drive stored %1$s bytes instead of %2$s."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:442
+msgid "The SHA-256 Google Drive reports does not match the archive."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:453
+msgid "The MD5 Google Drive reports does not match the archive."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:463
+msgid "Google Drive did not report a checksum for the uploaded backup; it was verified by its size only."
+msgstr ""
+
+#. translators: %s: reason
+#: includes/Export/Stages/RemoteUploadStage.php:527
+#, php-format
+msgid "The upload to Google Drive was started again: %s"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:531
+msgid "Starting the upload again"
+msgstr ""
+
+#. translators: %s: reason
+#: includes/Export/Stages/RemoteUploadStage.php:552
+#, php-format
+msgid "Upload to Google Drive failed: %s"
+msgstr ""
+
+#. translators: %s: reason
+#: includes/Export/Stages/RemoteUploadStage.php:563
+#, php-format
+msgid "The backup was kept on this server but not uploaded to Google Drive: %s"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:566
+msgid "Backup kept on this server; the upload to Google Drive failed"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:581
+msgid "The archive could not be opened for the upload."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:595
+msgid "The archive could not be read for the upload."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:648
+msgid "Google Drive needs to be reconnected (access was revoked or expired)."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:650
+msgid "The Google Drive connection belongs to another copy of this site. Confirm or reconnect it on the Scheduled Backups screen."
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:652
+msgid "Google Drive is not set up."
+msgstr ""
+
+#. translators: 1: bytes sent, 2: total
+#: includes/Export/Stages/RemoteUploadStage.php:668
+#, php-format
+msgid "Uploading to Google Drive: %1$s of %2$s"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:674
+msgid "Checking the copy on Google Drive"
+msgstr ""
+
+#: includes/Export/Stages/RemoteUploadStage.php:676
+msgid "Preparing the upload to Google Drive"
+msgstr ""
+
+#. translators: %d: seconds
+#: includes/Export/Stages/RemoteUploadStage.php:688
+#, php-format
+msgid "Google Drive is busy or unreachable; trying again in %d seconds"
 msgstr ""
 
 #: includes/Export/Stages/ScanStage.php:68
@@ -1977,19 +3330,45 @@ msgstr ""
 msgid "This upload belongs to another user."
 msgstr ""
 
-#: includes/Jobs/JobRunner.php:271
+#. translators: %d: number of requests
+#: includes/Jobs/JobRunner.php:258
+#, php-format
+msgid "The server stopped the request working on this job %d times in a row before it could save any progress (a PHP fatal error, the memory limit or a server timeout). The PHP error log names the cause."
+msgstr ""
+
+#: includes/Jobs/JobRunner.php:263
+msgid "Raise the PHP memory limit or the server time limits, or lower \"Time budget per request\" in the settings, then start again."
+msgstr ""
+
+#: includes/Jobs/JobRunner.php:386
+msgid "Upload to Google Drive completed."
+msgstr ""
+
+#: includes/Jobs/JobRunner.php:386
+msgid "Upload to Google Drive cancelled."
+msgstr ""
+
+#: includes/Jobs/JobRunner.php:388
+msgid "Backup completed."
+msgstr ""
+
+#: includes/Jobs/JobRunner.php:388
+msgid "Backup cancelled."
+msgstr ""
+
+#: includes/Jobs/JobRunner.php:390
 msgid "Migration completed."
 msgstr ""
 
-#: includes/Jobs/JobRunner.php:298
-msgid "Review the migration log, resolve the problem and resume or restart the job."
-msgstr ""
-
-#: includes/Jobs/JobRunner.php:322
+#: includes/Jobs/JobRunner.php:390
 msgid "Migration cancelled."
 msgstr ""
 
-#: includes/Jobs/Scheduler.php:63
+#: includes/Jobs/JobRunner.php:613
+msgid "Review the migration log, resolve the problem and resume or restart the job."
+msgstr ""
+
+#: includes/Jobs/Scheduler.php:80
 msgid "Every minute (SH Clone Migration)"
 msgstr ""
 
