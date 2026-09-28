@@ -187,7 +187,8 @@ final class History {
 	public function recordedArchives() {
 		$names = array();
 		foreach ( $this->entries() as $entry ) {
-			if ( ! empty( $entry['archive'] ) ) {
+			// A manual export sent to Drive stays a manual export here.
+			if ( ! empty( $entry['archive'] ) && ( ! isset( $entry['kind'] ) || 'upload' !== $entry['kind'] ) ) {
 				$names[] = (string) $entry['archive'];
 			}
 		}

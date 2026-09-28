@@ -427,7 +427,15 @@ class BackupController {
 	protected function history() {
 		$catalog = new \SHCM\Archive\Catalog( $this->plugin->storage() );
 		$rows    = array();
-		foreach ( $this->backups()->history()->all( 30 ) as $entry ) {
+		$history = array_filter(
+			$this->backups()->history()->all( 60 ),
+			static function ( $entry ) {
+				// Archives sent to Drive by hand are recorded for the Backups
+				// screen; they are not backup runs.
+				return ! isset( $entry['kind'] ) || 'upload' !== $entry['kind'];
+			}
+		);
+		foreach ( array_slice( $history, 0, 30 ) as $entry ) {
 			$archive = isset( $entry['archive'] ) ? (string) $entry['archive'] : '';
 			$present = '' !== $archive && null !== $catalog->resolve( $archive );
 			$started = isset( $entry['started'] ) ? (int) $entry['started'] : (int) $entry['created'];
@@ -445,7 +453,9 @@ class BackupController {
 				'error'     => isset( $entry['error'] ) ? (string) $entry['error'] : '',
 				'warnings'  => isset( $entry['warnings'] ) ? (int) $entry['warnings'] : 0,
 				'remote'    => isset( $entry['remote'] ) && is_array( $entry['remote'] ) ? $entry['remote'] : array(),
-				'job'       => 0 === strpos( (string) $entry['id'], 'skipped-' ) || 0 === strpos( (string) $entry['id'], 'failed-' ) ? '' : (string) $entry['id'],
+				// Only while the log exists (logs are purged after the retention
+				// days; the history lists runs for longer).
+				'job'       => 0 === strpos( (string) $entry['id'], 'skipped-' ) || 0 === strpos( (string) $entry['id'], 'failed-' ) || ! is_file( $this->plugin->logger()->path( (string) $entry['id'] ) ) ? '' : (string) $entry['id'],
 				// A plain URL: the script escapes what it puts into the page
 				// (wp_nonce_url() returns one already escaped for HTML).
 				'download'  => $present ? add_query_arg(

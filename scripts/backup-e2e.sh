@@ -309,6 +309,10 @@ wait_job "$UJ" status 300 >/dev/null
 is "manual export uploaded by hand" "$(cat "$WORK/last-status")" "completed"
 mkind=$(fstate | jq -r --arg n "$MANB" '[.files[] | select(.name==$n and (.trashed|not))][0].appProperties.shcm_kind')
 is "its Drive copy is tagged as a manual archive" "$mkind" "manual"
+mrow=$(curl -s -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm-backups" | tr -d '\n' | grep -o "<tr data-archive=\"$MANB\">.*" | sed 's#</tr>.*##')
+echo "$mrow" | grep -q 'on Google Drive'; check "the Backups screen marks the manual export as on Google Drive" $?
+again=$(ajax backup_upload "archive=$MANB" | jq -r '.data.message // ""')
+echo "$again" | grep -q "already on Google Drive"; check "sending it again is refused (no duplicate)" $? "($again)"
 ajax save_schedule 'schedule={"keep_local":0,"keep_remote":1}' >/dev/null
 JOB10=$(run_scheduled)
 is "keep 0 on this server: backup succeeds" "$(history_field "$JOB10" .status)" "success"

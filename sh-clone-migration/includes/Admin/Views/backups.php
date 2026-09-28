@@ -122,7 +122,7 @@ Menu::header(
 							<span class="description"><?php esc_html_e( 'Still being written, or the export did not finish', 'sh-clone-migration' ); ?></span>
 						<?php endif; ?>
 						<button type="button" class="button button-small" data-action="verify"><?php esc_html_e( 'Verify', 'sh-clone-migration' ); ?></button>
-						<?php if ( $shcm_drive && ! empty( $shcm_archive['complete'] ) ) : ?>
+						<?php if ( $shcm_drive && ! empty( $shcm_archive['complete'] ) && ! ( null !== $shcm_entry && isset( $shcm_entry['remote']['status'] ) && 'uploaded' === $shcm_entry['remote']['status'] ) ) : ?>
 							<button type="button" class="button button-small" data-action="gdrive"><?php esc_html_e( 'Send to Google Drive', 'sh-clone-migration' ); ?></button>
 						<?php endif; ?>
 						<button type="button" class="button button-small button-link-delete" data-action="delete"><?php esc_html_e( 'Delete', 'sh-clone-migration' ); ?></button>

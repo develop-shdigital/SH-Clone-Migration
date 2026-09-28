@@ -292,7 +292,7 @@ class Controller {
 		if ( ! Plugin::backupsAvailable() ) {
 			return;
 		}
-		$running = $this->plugin->backups()->runningJob();
+		$running = $this->plugin->backups()->buildingJob();
 		if ( null !== $running ) {
 			throw new \RuntimeException(
 				sprintf(

@@ -139,7 +139,8 @@ class BackupCommands {
 		$backups = $this->plugin->backups();
 		$backups->reconcile();
 
-		$running = $backups->runningJob();
+		// An upload to Drive running meanwhile does not hold the schedule up.
+		$running = $backups->buildingJob();
 		if ( null !== $running ) {
 			$job = $this->plugin->jobs()->load( $running );
 			if ( null !== $job && ! \SHCM\Jobs\Scheduler::workerMayTick( $job, $this->plugin->runner()->jobsDirectory(), time() ) ) {

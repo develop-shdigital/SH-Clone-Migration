@@ -895,7 +895,9 @@ class BackupManager {
 					'defer'   => true,
 				);
 			}
-			if ( $this->isBackupJob( $job ) ) {
+			// An upload of a finished archive only reads it: it neither holds
+			// a new backup back nor counts as one.
+			if ( $this->isBackupJob( $job ) && ! $job->param( 'upload_only' ) ) {
 				return array(
 					'message' => __( 'The previous backup is still running.', 'sh-clone-migration' ),
 					'defer'   => false,
@@ -958,8 +960,17 @@ class BackupManager {
 		}
 
 		$config = $this->config();
-		if ( ! empty( $overrides ) ) {
-			$config = Schedule::sanitize( array_intersect_key( $overrides, array_flip( array( 'contents', 'gdrive', 'include_core' ) ) ), $config );
+		$input  = array_intersect_key( $overrides, array_flip( array( 'contents', 'gdrive', 'include_core' ) ) );
+		$upload = isset( $input['gdrive'] ) ? (bool) $input['gdrive'] : ! empty( $config['gdrive'] );
+		if ( 0 === (int) $config['keep_local'] && ( ! $upload || ! $this->connection()->isUsable() ) ) {
+			// "Keep 0 on this server" relies on the copy on Drive. A run that
+			// cannot make one (Drive switched off for it, or needing to be
+			// reconnected) keeps its archive here instead of refusing to run
+			// when a backup is needed most.
+			$input['keep_local'] = 1;
+		}
+		if ( ! empty( $input ) ) {
+			$config = Schedule::sanitize( $input, $config );
 		}
 		$gdrive = ! empty( $config['gdrive'] );
 		if ( $gdrive && ! $this->connection()->isUsable() ) {
@@ -1058,7 +1069,26 @@ class BackupManager {
 		}
 
 		$entry = '' !== $history ? $this->history()->get( $history ) : $this->history()->forArchive( basename( $path ) );
-		$kind  = null !== $entry && isset( $entry['kind'] ) ? (string) $entry['kind'] : ( 'backup' === $kind ? 'backup' : 'manual' );
+		if ( null !== $entry && isset( $entry['remote']['status'] ) && 'uploaded' === $entry['remote']['status'] && $this->stillOnDrive( $entry ) ) {
+			// Sending it again would only make a second copy (and a cancelled
+			// or failed re-send used to mark the good one as failed).
+			throw new \RuntimeException( __( 'This archive is already on Google Drive.', 'sh-clone-migration' ) );
+		}
+		if ( null === $entry ) {
+			// An archive the backup history does not know (a manual export):
+			// record the upload, so the Backups screen shows it is on Drive.
+			$entry = $this->history()->record(
+				'upload-' . gmdate( 'Ymd-His' ) . '-' . bin2hex( random_bytes( 3 ) ),
+				array(
+					'kind'    => 'upload',
+					'trigger' => 'manual',
+					'started' => time(),
+					'archive' => basename( $path ),
+					'size'    => (int) @filesize( $path ),
+				)
+			);
+		}
+		$kind   = isset( $entry['kind'] ) ? (string) $entry['kind'] : ( 'backup' === $kind ? 'backup' : 'manual' );
 		$config = $this->config();
 
 		$params = array(
@@ -1066,7 +1096,7 @@ class BackupManager {
 			'archive_path'   => $path,
 			'archive_sha256' => $catalog->sha256( $path ),
 			'background'     => true,
-			'history_id'     => null !== $entry ? (string) $entry['id'] : '',
+			'history_id'     => (string) $entry['id'],
 			'backup'         => array(
 				'kind'        => $kind,
 				'trigger'     => 'manual',
@@ -1076,10 +1106,31 @@ class BackupManager {
 			),
 		);
 		$job = $this->createJob( $params );
-		if ( null !== $entry ) {
-			$this->history()->record( (string) $entry['id'], array( 'remote' => array( 'status' => 'pending', 'error' => '', 'job' => $job->id() ) ) );
-		}
+		$this->history()->record( (string) $entry['id'], array( 'remote' => array( 'status' => 'pending', 'error' => '', 'job' => $job->id() ) ) );
 		return $job;
+	}
+
+	/**
+	 * Whether the Drive copy a history entry records still exists (the owner
+	 * may have deleted it in Drive). When Drive cannot be asked, assume so.
+	 *
+	 * @param array $entry History entry.
+	 * @return bool
+	 */
+	protected function stillOnDrive( array $entry ) {
+		$file_id = isset( $entry['remote']['file_id'] ) ? (string) $entry['remote']['file_id'] : '';
+		if ( '' === $file_id ) {
+			return false;
+		}
+		try {
+			$this->protectSecrets();
+			$file = $this->drive()->getFile( $file_id );
+			return is_array( $file ) && empty( $file['trashed'] );
+		} catch ( \SHCM\Remote\GoogleDrive\DriveException $e ) {
+			return \SHCM\Remote\GoogleDrive\DriveException::NOT_FOUND !== $e->kind();
+		} catch ( \Exception $e ) {
+			return true;
+		}
 	}
 
 	/**
@@ -1183,7 +1234,14 @@ class BackupManager {
 
 		if ( $job->param( 'upload_only' ) ) {
 			if ( '' !== $id ) {
-				$this->history()->record( $id, array( 'remote' => $this->remoteFields( $remote ) ) );
+				$fields   = array( 'remote' => $this->remoteFields( $remote ) );
+				$existing = $this->history()->get( $id );
+				if ( 'uploaded' === $fields['remote']['status'] && is_array( $existing ) && isset( $existing['status'] ) && 'partial' === $existing['status'] ) {
+					// The retried upload made the backup whole.
+					$fields['status'] = 'success';
+					$fields['error']  = '';
+				}
+				$this->recordSafely( $id, $fields );
 			}
 			return;
 		}
@@ -1474,7 +1532,23 @@ class BackupManager {
 	}
 
 	/**
-	 * The backup job currently running, if any.
+	 * The backup currently making an archive of the site, if any (an upload
+	 * of a finished archive does not count: it never touches the site).
+	 *
+	 * @return string|null Job id.
+	 */
+	public function buildingJob() {
+		foreach ( $this->plugin->jobs()->all( Job::TYPE_EXPORT, 20 ) as $job ) {
+			if ( $job->isRunnable() && $this->isBackupJob( $job ) && ! $job->param( 'upload_only' ) ) {
+				return $job->id();
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The backup job or upload to Google Drive currently running, if any
+	 * (the progress display follows either).
 	 *
 	 * @return string|null Job id.
 	 */
