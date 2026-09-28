@@ -172,7 +172,7 @@
 		var progress = Number( job.progress ) || 0;
 		this.bar.style.width = progress + '%';
 		this.label.textContent = progress.toFixed( 1 ) + '%';
-		this.message.textContent = job.message || '';
+		this.message.textContent = job.cancel_requested && strings.cancelling ? strings.cancelling : ( job.message || '' );
 
 		if ( job.status === 'completed' ) {
 			this.bar.parentNode.classList.add( 'shcm-bar--done' );
@@ -1343,19 +1343,23 @@
 			var remote = history.filter( function ( row ) { return row.remote && row.remote.status === 'uploaded'; } );
 			var last = schedule.last;
 			var next;
+			var nextLabel = schedule.describe || '';
 			if ( ! schedule.identity_ok ) {
 				next = L.paused;
 			} else if ( ( schedule.config || {} ).frequency === 'manual' ) {
 				next = L.onDemand;
+			} else if ( status.next_in ) {
+				next = status.next_soon ? L.anyMoment : fmt( L.nextIn, status.next_in );
+				nextLabel = fmt( L.nextLabel, schedule.describe || '', status.next_when || '' );
 			} else {
-				next = status.next_text || '—';
+				next = '—';
 			}
 			var lastText = '—';
 			if ( last ) {
 				lastText = ( { success: L.statusOk, partial: L.statusPartial, failed: L.statusFailed, skipped: L.statusSkipped, cancelled: L.statusCancelled }[ last.status ] || last.status );
 			}
 			var tiles = [
-				[ next, schedule.describe || '' ],
+				[ next, nextLabel ],
 				[ lastText, last ? L.lastBackup : L.noBackupYet, last && ( last.status === 'failed' || last.status === 'partial' ) ],
 				[ formatNumber( local.length ) + ' · ' + formatBytes( localBytes ), L.keptHere ],
 				[ drive.state === 'connected' ? fmt( L.onDrive, formatNumber( remote.length ) ) : ( drive.state === 'reconnect' ? L.reconnectShort : L.notConnected ), L.googleDrive, drive.state === 'reconnect' ]
@@ -1596,7 +1600,7 @@
 		} );
 
 		$( '#shcm-cancel-job' ).addEventListener( 'click', function () {
-			if ( window.confirm( strings.confirmCancel ) ) {
+			if ( window.confirm( L.confirmCancel ) ) {
 				runner.cancel();
 			}
 		} );

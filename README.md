@@ -5,9 +5,11 @@ Complete WordPress website cloning and migration system.
 SH Clone Migration exports an entire WordPress installation — the whole
 database plus every file under `wp-content` — into a single portable
 `.wpress` archive, and restores it onto any other WordPress installation.
-There are no size caps, no premium tier, no license keys and no external
-services: the archive travels from source to destination and nothing else is
-involved.
+There are no size caps, no premium tier and no license keys. A migration
+involves no external service: the archive travels from source to destination
+and nothing else is involved. It can also make scheduled backups (daily,
+weekly, monthly or on demand) and, if you connect it, keep copies on your own
+Google Drive.
 
 ```
 Source WordPress  ──▶  site.wpress  ──▶  Destination WordPress

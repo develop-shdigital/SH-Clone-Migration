@@ -190,6 +190,7 @@ class Menu {
 			'confirmImport'   => __( "This will replace this website's database and files with the contents of the archive. Existing data may be overwritten. Continue?", 'sh-clone-migration' ),
 			'confirmDelete'   => __( 'Delete this archive permanently?', 'sh-clone-migration' ),
 			'confirmCancel'   => __( 'Cancel this migration?', 'sh-clone-migration' ),
+			'cancelling'      => __( 'Cancelling… (stopping after the current step)', 'sh-clone-migration' ),
 			'uploading'       => __( 'Uploading', 'sh-clone-migration' ),
 			'uploadComplete'  => __( 'Upload complete', 'sh-clone-migration' ),
 			'verifying'       => __( 'Verifying', 'sh-clone-migration' ),
@@ -211,6 +212,12 @@ class Menu {
 			'schedulesUrl'    => admin_url( 'admin.php?page=shcm-schedules' ),
 			'sched'           => array(
 				'paused'             => __( 'Paused', 'sh-clone-migration' ),
+				/* translators: %s: time until the next backup, e.g. "12 hours" */
+				'nextIn'             => __( 'in %s', 'sh-clone-migration' ),
+				'anyMoment'          => __( 'Any moment now', 'sh-clone-migration' ),
+				'confirmCancel'      => __( 'Cancel this backup?', 'sh-clone-migration' ),
+				/* translators: 1: schedule, e.g. "Daily at 03:15", 2: date and time of the next backup */
+				'nextLabel'          => __( '%1$s · next %2$s', 'sh-clone-migration' ),
 				'onDemand'           => __( 'On demand', 'sh-clone-migration' ),
 				'statusOk'           => __( 'OK', 'sh-clone-migration' ),
 				'statusPartial'      => __( 'Not uploaded', 'sh-clone-migration' ),

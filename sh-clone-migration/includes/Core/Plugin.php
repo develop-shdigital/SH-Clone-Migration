@@ -91,10 +91,11 @@ class Plugin {
 		( new Ajax( $this ) )->register();
 		( new Rest( $this ) )->register();
 		( new Scheduler( $this ) )->register();
-		// Work in progress: scheduled backups switch on once every part of
-		// the feature is in place.
 		if ( self::backupsAvailable() ) {
 			$this->backups()->register();
+		} else {
+			// Switched off: drop backup events left from when it was on.
+			add_action( 'shcm_worker', array( \SHCM\Backup\BackupManager::class, 'unscheduleAll' ) );
 		}
 
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
@@ -244,22 +245,16 @@ class Plugin {
 	}
 
 	/**
-	 * Whether every part of the scheduled-backup feature is present.
+	 * Whether scheduled backups are switched on.
+	 *
+	 * They are, unless wp-config.php defines SHCM_DISABLE_BACKUPS as true:
+	 * for hosts that forbid background work or outgoing connections, or to
+	 * rule the feature out while troubleshooting. Migrations are unaffected.
 	 *
 	 * @return bool
 	 */
 	public static function backupsAvailable() {
-		// Until the feature has passed its end-to-end tests it only switches
-		// on where SHCM_ENABLE_BACKUPS is defined (the test site).
-		if ( ! defined( 'SHCM_ENABLE_BACKUPS' ) || ! SHCM_ENABLE_BACKUPS ) {
-			return false;
-		}
-		foreach ( array( '\SHCM\Backup\Schedule', '\SHCM\Remote\GoogleDrive\Client', '\SHCM\CLI\BackupCommands', '\SHCM\CLI\DriveCommands', '\SHCM\Jobs\JobLock' ) as $class ) {
-			if ( ! class_exists( $class ) ) {
-				return false;
-			}
-		}
-		return true;
+		return ! ( defined( 'SHCM_DISABLE_BACKUPS' ) && SHCM_DISABLE_BACKUPS );
 	}
 
 	/**

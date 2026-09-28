@@ -543,8 +543,16 @@ class Commands {
 		if ( empty( $args[0] ) ) {
 			\WP_CLI::error( 'Specify the job to cancel.' );
 		}
-		$this->controller->cancel( $args[0] );
-		\WP_CLI::success( 'Job cancelled.' );
+		$job = $this->controller->cancel( $args[0] );
+		if ( 'cancelled' === $job['status'] ) {
+			\WP_CLI::success( 'Job cancelled.' );
+		} elseif ( ! empty( $job['cancel_requested'] ) ) {
+			// Another request is working on the job; it stops after its
+			// current step.
+			\WP_CLI::success( 'Cancel requested: the job stops after its current step.' );
+		} else {
+			\WP_CLI::warning( sprintf( 'The job was not cancelled: it is %s.', $job['status'] ) );
+		}
 	}
 
 	/**

@@ -170,7 +170,10 @@ apply_filters( 'shcm_background_loopback', true, $job_id );
 
 Constants: `SHCM_GDRIVE_CLIENT_ID` and `SHCM_GDRIVE_CLIENT_SECRET` supply the
 Google OAuth client; `SHCM_SECRET_KEY` (32+ characters) replaces the
-`wp-config.php` secret keys as the key material for sealed secrets.
+`wp-config.php` secret keys as the key material for sealed secrets;
+`SHCM_DISABLE_BACKUPS` set to `true` switches scheduled backups off entirely
+(no screen, no WP-Cron event, no WP-CLI `backup`/`gdrive` commands; migrations
+are unaffected).
 
 The "Excluded directories" setting is matched as anchored paths (a bare
 `cache` is the top-level `cache` only); patterns from the filter above, the

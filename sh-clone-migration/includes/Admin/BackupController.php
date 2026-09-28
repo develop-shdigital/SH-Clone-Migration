@@ -75,6 +75,9 @@ class BackupController {
 		return array(
 			'schedule'  => $summary,
 			'next_text' => $this->nextText( $summary['next_run'] ),
+			'next_soon' => $summary['next_run'] && (int) $summary['next_run'] - time() <= 60,
+			'next_in'   => $summary['next_run'] ? human_time_diff( time(), (int) $summary['next_run'] ) : '',
+			'next_when' => $summary['next_run'] ? wp_date( get_option( 'date_format' ) . ' H:i', (int) $summary['next_run'] ) : '',
 			'history'   => $this->history(),
 			'drive'     => $this->driveStatus(),
 		);

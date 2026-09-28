@@ -340,8 +340,12 @@ class Ajax {
 	 * Scheduled Backups controller.
 	 *
 	 * @return BackupController
+	 * @throws \RuntimeException When scheduled backups are switched off.
 	 */
 	protected function backups() {
+		if ( ! \SHCM\Core\Plugin::backupsAvailable() ) {
+			throw new \RuntimeException( __( 'Scheduled backups are switched off on this site (SHCM_DISABLE_BACKUPS).', 'sh-clone-migration' ) );
+		}
 		if ( null === $this->backups ) {
 			$this->backups = new BackupController( $this->plugin, $this->controller );
 		}

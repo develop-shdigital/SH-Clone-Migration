@@ -82,7 +82,8 @@ rm -f "$ROOT"/wp-content/shcm-storage/archives/*.wpress "$ROOT"/wp-content/shcm-
 for c in AUTH:o/oauth2/v2/auth TOKEN:token REVOKE:revoke API:drive/v3 UPLOAD:upload/drive/v3; do
 	wpc config set "SHCM_GDRIVE_${c%%:*}_URL" "$FAKE/${c#*:}" --type=constant >/dev/null
 done
-wpc config set SHCM_ENABLE_BACKUPS true --raw --type=constant >/dev/null
+wpc config delete SHCM_ENABLE_BACKUPS >/dev/null 2>&1
+wpc config delete SHCM_DISABLE_BACKUPS >/dev/null 2>&1
 wpc option delete shcm_test_backoff shcm_test_chunk shcm_test_no_loopback >/dev/null
 fuser -k "$FAKE_PORT/tcp" >/dev/null 2>&1
 FAKE_GOOGLE_DIR=$WORK/fake PHP_CLI_SERVER_WORKERS=4 nohup php -S "127.0.0.1:$FAKE_PORT" "$PLUGIN/tests/fake-google/router.php" > "$WORK/fake.log" 2>&1 &
@@ -91,7 +92,7 @@ trap 'kill $FAKE_PID 2>/dev/null; for c in AUTH TOKEN REVOKE API UPLOAD; do (cd 
 for i in $(seq 1 30); do curl -s "$FAKE/__health" | grep -q ok && break; sleep 0.2; done
 control '{"reset":true}'
 avail=$(wpe 'var_dump( \SHCM\Core\Plugin::backupsAvailable() );')
-is "feature available (all parts present)" "$avail" "bool(true)"
+is "scheduled backups are on by default" "$avail" "bool(true)"
 
 curl -s -o /dev/null -c "$JAR" -b "$JAR" -H "$H" "$BASE/wp-login.php"
 curl -s -o /dev/null -c "$JAR" -b "$JAR" -H "$H" --data "log=$USER_NAME&pwd=$USER_PASS&wp-submit=Log+In&testcookie=1" "$BASE/wp-login.php"
@@ -313,6 +314,19 @@ leaks=$(grep -rlE 'ya29\.fake|1//fake|GOCSPX-fake|upload_id=[A-Za-z0-9]' "$ROOT/
 is "files containing a token, secret or session URI" "$leaks" "0"
 dbleak=$(wpe 'global $wpdb; $q = chr( 39 ); echo (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_value LIKE {$q}%fake-secret%{$q} OR option_value LIKE {$q}%1//fake%{$q} OR option_value LIKE {$q}%ya29.fake%{$q}" );')
 is "database rows containing Drive secrets" "$dbleak" "0"
+
+echo
+echo "--- 11. SHCM_DISABLE_BACKUPS switches the feature off -------------"
+wpc config set SHCM_DISABLE_BACKUPS true --raw --type=constant >/dev/null
+menu=$(curl -s -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm" | grep -c 'page=shcm-schedules')
+is "no Scheduled Backups menu entry" "$menu" "0"
+is "backup AJAX actions refuse" "$(ajax backup_status | jq -r '.success')" "false"
+(cd "$ROOT" && wp --allow-root shcm backup schedule >/dev/null 2>&1); is "no WP-CLI backup command" "$?" "1"
+is "its WP-Cron event is removed" "$(wpe 'do_action( "shcm_worker" ); var_dump( (bool) wp_next_scheduled( "shcm_scheduled_backup" ) );')" "bool(false)"
+wpc config delete SHCM_DISABLE_BACKUPS >/dev/null
+curl -s -o /dev/null -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm-schedules"
+is "back on: the schedule is armed again" "$(wpe 'var_dump( (bool) wp_next_scheduled( "shcm_scheduled_backup" ) );')" "bool(true)"
+is "back on: the menu entry returns" "$(curl -s -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm" | grep -c 'page=shcm-schedules' | awk '{print ($1 > 0)}')" "1"
 
 echo
 echo "  checks passed: $PASS, failed: $FAIL"
