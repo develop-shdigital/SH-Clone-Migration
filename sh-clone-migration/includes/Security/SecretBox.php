@@ -168,7 +168,10 @@ final class SecretBox {
 	 * @return string 64 hex characters.
 	 */
 	public function mac( $data ) {
-		return hash_hmac( 'sha256', (string) $data, $this->key( 'mac' ) );
+		// Not key( 'mac' ): an info string outside the "shcm:secretbox:<context>:v1"
+		// family keeps the HMAC key distinct from every seal() key, whatever
+		// context a caller picks.
+		return hash_hmac( 'sha256', (string) $data, hash_hkdf( 'sha256', $this->master, 32, 'shcm:secretbox-mac:v1' ) );
 	}
 
 	/**

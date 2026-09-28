@@ -124,7 +124,11 @@ class BackupManager {
 	 */
 	public function connection() {
 		if ( ! isset( $this->services['connection'] ) ) {
-			$this->services['connection'] = new Connection( $this->store(), $this->box() );
+			$connection = new Connection( $this->store(), $this->box() );
+			// Every token or secret the connection opens or receives becomes
+			// unprintable in logs from that moment on.
+			$connection->onSecret( array( $this->plugin->logger()->redactor(), 'addLiteral' ) );
+			$this->services['connection'] = $connection;
 		}
 		return $this->services['connection'];
 	}
@@ -213,7 +217,9 @@ class BackupManager {
 		$data = $this->store()->read( self::DOCUMENT );
 		$raw  = isset( $data['config'] ) && is_array( $data['config'] ) ? $data['config'] : array();
 		try {
-			return Schedule::sanitize( $raw );
+			// Stored values are the "current" side: a damaged field falls back
+			// to its default instead of discarding the whole schedule.
+			return Schedule::sanitize( array(), $raw );
 		} catch ( \InvalidArgumentException $e ) {
 			return Schedule::defaults();
 		}
@@ -375,6 +381,26 @@ class BackupManager {
 	 * @return void
 	 */
 	public function handleScheduledEvent() {
+		$job = $this->startScheduled( true );
+		if ( null !== $job ) {
+			// First slice in this cron request; the rest continues through
+			// loopback requests (or the minute worker if loopbacks are blocked).
+			$this->runner()->drive( $job );
+		}
+	}
+
+	/**
+	 * Start the scheduled backup if it is due.
+	 *
+	 * Shared by the WP-Cron event and `wp shcm backup run` (system cron), so
+	 * the two cannot both start the same run: whichever comes first moves
+	 * next_run forward and the other finds nothing due.
+	 *
+	 * @param bool $from_event Called by the WP-Cron event (which may fire a
+	 *                         little early, or be a leftover from an import).
+	 * @return Job|null The job started, or null.
+	 */
+	public function startScheduled( $from_event = false ) {
 		$config = $this->config();
 		$state  = $this->state();
 		$logger = $this->plugin->logger()->channel( 'plugin' );
@@ -382,12 +408,18 @@ class BackupManager {
 		if ( 'manual' === $config['frequency'] || ! $this->identityMatches() || ! $this->isMainSite() ) {
 			// An event left behind by an import or by an older schedule.
 			$this->reconcile();
-			return;
+			return null;
 		}
-		if ( null !== $state['next_run'] && time() < (int) $state['next_run'] - 60 ) {
-			// Fired early: an event that came with an imported cron option.
+		$next = null === $state['next_run'] ? null : (int) $state['next_run'];
+		if ( null !== $next && time() < $next - ( $from_event ? 60 : 0 ) ) {
+			// Not due yet (for the event: an event that came with an imported
+			// cron option, or a clock that is slightly ahead).
 			$this->reconcile();
-			return;
+			return null;
+		}
+		if ( null === $next ) {
+			$this->reconcile();
+			return null;
 		}
 
 		$conflict = $this->conflict();
@@ -404,10 +436,10 @@ class BackupManager {
 				);
 			} else {
 				$logger->warning( 'Scheduled backup skipped: ' . $conflict['message'] );
-				$this->history()->record(
-					'skipped-' . gmdate( 'Ymd-His' ),
+				$entry = $this->history()->record(
+					'skipped-' . gmdate( 'Ymd-His' ) . '-' . bin2hex( random_bytes( 2 ) ),
 					array(
-						'kind'     => 'backup',
+						'kind'     => 'skipped',
 						'trigger'  => 'schedule',
 						'status'   => 'skipped',
 						'started'  => time(),
@@ -415,20 +447,24 @@ class BackupManager {
 						'error'    => $conflict['message'],
 					)
 				);
+				if ( $conflict['defer'] ) {
+					// Skipped after repeated postponements: worth an e-mail.
+					$this->notify( $entry, $config );
+				}
 				$this->advanceSchedule( $config );
 			}
 			$this->reconcile();
-			return;
+			return null;
 		}
 
 		try {
 			$job = $this->startBackup( 'schedule' );
 		} catch ( \Exception $e ) {
 			$logger->error( 'Scheduled backup could not start: ' . $e->getMessage() );
-			$this->history()->record(
-				'failed-' . gmdate( 'Ymd-His' ),
+			$entry = $this->history()->record(
+				'failed-' . gmdate( 'Ymd-His' ) . '-' . bin2hex( random_bytes( 2 ) ),
 				array(
-					'kind'     => 'backup',
+					'kind'     => 'failed',
 					'trigger'  => 'schedule',
 					'status'   => 'failed',
 					'started'  => time(),
@@ -436,18 +472,15 @@ class BackupManager {
 					'error'    => $e->getMessage(),
 				)
 			);
-			$this->notify( $this->history()->latest(), $config );
+			$this->notify( $entry, $config );
 			$this->advanceSchedule( $config );
 			$this->reconcile();
-			return;
+			return null;
 		}
 
 		$this->advanceSchedule( $config, $job->id() );
 		$this->reconcile();
-
-		// First slice in this cron request; the rest continues through
-		// loopback requests (or the minute worker if loopbacks are blocked).
-		$this->runner()->drive( $job );
+		return $job;
 	}
 
 	/**

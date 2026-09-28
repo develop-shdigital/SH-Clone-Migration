@@ -40,6 +40,11 @@ the handful of WordPress functions the engine touches (`is_serialized`,
 | `tests/unit/DeliveryTest.php` | HTTP range resolution (suffix, open, clamped, 416, multi-range, If-Range), lossless JSON for non-UTF-8 names, strict JSON encoding, resumable whole-file SHA-256, the `.sha256` checksum file |
 | `tests/unit/FileSelectionTest.php` | Symlinked uploads as a root, followed plugin links with loop protection, links containing the site, to `/` and into `/proc` refused, two links to one outside directory, a second link to a root kept as a link, files deleted between scan requests, non-UTF-8 and backslash names, content not walked twice with core included, huge directories resumed, anchored exclusions, `wp-content/` aliases for separate roots, path collapsing, queue truncation and torn lines, unique table entry names |
 | `tests/unit/IntegrityTest.php` | Archive descriptions taken from the footer only (incomplete archives claim no contents), a writer refusing to resume onto a shortened file, damaged headers, ledger scheme 2 catching a redirected symlink, the one-shot SHA-256 of older PHP and its attempt marker, every warning of a step reaching the log |
+| `tests/unit/ScheduleTest.php` | The backup schedule: validation of every field, next run for daily, weekly and monthly schedules across DST gaps and overlaps, month ends and time zones, the human description |
+| `tests/unit/BackupFoundationTest.php` | Sealed secrets (wrong context, other key, tampering), guarded configuration files and their locking, the backup history |
+| `tests/unit/GoogleDriveTest.php` | The Google OAuth and Drive client against a scripted transport: consent URL, code exchange, token refresh and revocation, every error mapping, folders, listing with pagination, resumable upload responses (308 with and without Range, restarts, rate limits, quota), downloads, and that no secret appears in an exception |
+| `tests/unit/RedactorTest.php` | Google tokens, secrets, authorization codes and session URIs scrubbed from logs, without false positives |
+| `tests/unit/JobLockTest.php` | The per-job lock: exclusion between processes, release when a process dies, stale lock files |
 | `tests/integration/FilePipelineTest.php` | A real directory tree scanned, archived, restored and compared byte for byte; hostile archives refused; scan resumability |
 
 Some behaviour can only be tested inside WordPress against a real database.
@@ -56,7 +61,10 @@ The shell scripts in `scripts/` run the full migrations: `e2e.sh` (a realistic
 site cloned onto another one), `e2e-edge.sh` (shared databases, symlinked
 uploads and plugins, odd file names, a file modified mid-copy, thousands of
 tiny requests) and `download-test.sh` (the download endpoint the way browsers
-and download managers use it). They are described in
+and download managers use it) and `backup-e2e.sh` (scheduled backups and
+Google Drive storage against the fake Google server in `tests/fake-google/`,
+which implements OAuth and the Drive v3 calls the plugin uses, with fault
+injection; see its README). They are described in
 [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md).
 
 ## Coding standards
@@ -125,7 +133,44 @@ apply_filters( 'shcm_job_stages', $stages, $type, $params );
  * @param bool $manage Default true.
  */
 apply_filters( 'shcm_manage_htaccess', true );
+
+/**
+ * Password for an encrypted background job (scheduled backups answer it
+ * from their sealed store).
+ *
+ * @param string        $password '' so far.
+ * @param SHCM\Jobs\Job $job      Job with param password_source.
+ */
+apply_filters( 'shcm_job_password', '', $job );
+
+/**
+ * Google Drive upload chunk size in bytes (rounded down to a multiple of
+ * 256 KiB; also capped by free memory). Default 8 MiB.
+ */
+apply_filters( 'shcm_gdrive_chunk_size', 8388608 );
+
+/**
+ * Seconds to wait before each retry of a failing Google Drive request; one
+ * entry per retry. Default array( 30, 60, 120, 240, 480, 960 ).
+ */
+apply_filters( 'shcm_gdrive_backoff', $delays );
+
+/**
+ * Google endpoints (keys auth, token, revoke, api, upload), for tests.
+ * The SHCM_GDRIVE_*_URL constants do the same.
+ */
+apply_filters( 'shcm_gdrive_endpoints', $endpoints );
+
+/**
+ * Whether background jobs chain their slices through loopback requests.
+ * Without them the minute worker (or an open admin page) advances the job.
+ */
+apply_filters( 'shcm_background_loopback', true, $job_id );
 ```
+
+Constants: `SHCM_GDRIVE_CLIENT_ID` and `SHCM_GDRIVE_CLIENT_SECRET` supply the
+Google OAuth client; `SHCM_SECRET_KEY` (32+ characters) replaces the
+`wp-config.php` secret keys as the key material for sealed secrets.
 
 The "Excluded directories" setting is matched as anchored paths (a bare
 `cache` is the top-level `cache` only); patterns from the filter above, the
@@ -138,6 +183,9 @@ pattern without a slash matches that name at any depth.
 do_action( 'shcm_job_completed', SHCM\Jobs\Job $job );
 do_action( 'shcm_job_failed', SHCM\Jobs\Job $job, Throwable $error );
 do_action( 'shcm_job_cancelled', SHCM\Jobs\Job $job );
+do_action( 'shcm_worker_ticked', SHCM\Jobs\Job $job );  // the minute worker advanced a job
+do_action( 'shcm_scheduled_backup' );                     // WP-Cron event of the backup schedule
+do_action( 'shcm_background_resume', string $job_id );    // a background job continuing later
 ```
 
 ## Programmatic API

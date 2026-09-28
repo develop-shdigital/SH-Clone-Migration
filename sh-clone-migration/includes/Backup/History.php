@@ -62,6 +62,8 @@ final class History {
 				}
 				if ( null === $found ) {
 					$entry = array_merge( array( 'id' => $id, 'created' => time() ), $fields );
+					// The id is the lookup key: a field named "id" must not change it.
+					$entry['id'] = $id;
 					array_unshift( $entries, $entry );
 				} else {
 					$entry = $entries[ $found ];
@@ -72,6 +74,7 @@ final class History {
 							$entry[ $key ] = $value;
 						}
 					}
+					$entry['id']       = $id;
 					$entries[ $found ] = $entry;
 				}
 				$saved           = $entry;
@@ -126,12 +129,17 @@ final class History {
 	 * Base names of the archives produced by backup runs (not manual exports
 	 * or archives sent to Drive by hand), newest first.
 	 *
+	 * Only entries whose kind is exactly "backup" count. Retention deletes
+	 * what this returns, so an entry without a kind (for example one
+	 * recreated by a late update after it fell out of the capped list) must
+	 * not make its archive prunable.
+	 *
 	 * @return string[]
 	 */
 	public function archiveNames() {
 		$names = array();
 		foreach ( $this->entries() as $entry ) {
-			if ( empty( $entry['archive'] ) || ( isset( $entry['kind'] ) && 'backup' !== $entry['kind'] ) ) {
+			if ( empty( $entry['archive'] ) || ! isset( $entry['kind'] ) || 'backup' !== $entry['kind'] ) {
 				continue;
 			}
 			$names[] = (string) $entry['archive'];

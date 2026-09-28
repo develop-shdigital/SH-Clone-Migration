@@ -462,11 +462,17 @@ class RemoteUploadStage extends AbstractStage {
 	 */
 	protected function driveError( Job $job, array &$state, DriveException $e ) {
 		if ( $e->isRetryable() ) {
+			/**
+			 * Seconds to wait before each retry of a Google Drive request.
+			 *
+			 * @param int[] $delays One entry per retry; more entries mean more retries.
+			 */
+			$delays = array_values( array_map( 'intval', (array) apply_filters( 'shcm_gdrive_backoff', self::$backoff ) ) );
 			++$state['retries'];
-			if ( $state['retries'] > count( self::$backoff ) ) {
+			if ( $state['retries'] > count( $delays ) ) {
 				return $this->giveUp( $job, $state, $e->getMessage(), $e->kind() );
 			}
-			$delay          = self::$backoff[ $state['retries'] - 1 ] + random_int( 0, 5 );
+			$delay          = max( 1, $delays[ $state['retries'] - 1 ] ) + ( $delays[ $state['retries'] - 1 ] >= 30 ? random_int( 0, 5 ) : 0 );
 			$state['query'] = 'upload' === $state['phase'];
 			$job->setShared( 'resume_at', time() + $delay );
 			$this->logger->warning( sprintf( 'Google Drive: %1$s Retry %2$d in %3$d s.', $e->getMessage(), $state['retries'], $delay ) );

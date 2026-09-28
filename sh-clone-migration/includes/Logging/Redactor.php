@@ -36,6 +36,10 @@ class Redactor {
 	/**
 	 * Register a literal string that must never appear in a log.
 	 *
+	 * The URL-encoded forms are registered too: secrets travel in form bodies,
+	 * query strings and URLs nested inside other URLs, where the token-shape
+	 * patterns below cannot recognise every value.
+	 *
 	 * @param string $value Secret value.
 	 * @return void
 	 */
@@ -44,8 +48,13 @@ class Redactor {
 		$value
 	) {
 		$value = (string) $value;
-		if ( strlen( $value ) >= 4 ) {
-			$this->literals[] = $value;
+		if ( strlen( $value ) < 4 ) {
+			return;
+		}
+		foreach ( array( $value, rawurlencode( $value ), urlencode( $value ) ) as $variant ) {
+			if ( ! in_array( $variant, $this->literals, true ) ) {
+				$this->literals[] = $variant;
+			}
 		}
 	}
 
@@ -112,11 +121,13 @@ class Redactor {
 			// minimum keeps numeric values such as "code":403 readable.
 			'#(\b(?:code|authorization_code|code_verifier|upload_id|id_token|assertion|client_assertion|session_uri|upload_url)[\'"]?\s*[:=]\s*[\'"]?)([^\s,;\'"&]{8,})#i',
 			// Google token shapes, also in free text and stack traces: access token,
-			// refresh token, authorization code, client secret.
-			'#\bya29\.[A-Za-z0-9\-_.]+#',
-			'#\b1//[A-Za-z0-9\-_]{10,}#',
-			'#\b4/0[A-Za-z0-9\-_]{10,}#',
-			'#\bGOCSPX-[A-Za-z0-9\-_]{10,}#',
+			// refresh token, authorization code, client secret. They may also start
+			// right after a percent-encoded character ("%3DGOCSPX-...", where \b does
+			// not match) and carry encoded slashes ("1%2F%2F0...").
+			'#(?:\b|(?<=%[0-9A-Fa-f]{2}))ya29\.[A-Za-z0-9\-_.]+#',
+			'#(?:\b|(?<=%[0-9A-Fa-f]{2}))1(?:/|%2[Ff]){2}[A-Za-z0-9\-_]{10,}#',
+			'#(?:\b|(?<=%[0-9A-Fa-f]{2}))4(?:/|%2[Ff])0[A-Za-z0-9\-_]{10,}#',
+			'#(?:\b|(?<=%[0-9A-Fa-f]{2}))GOCSPX-[A-Za-z0-9\-_]{10,}#',
 			// A resumable upload session URI is itself a credential.
 			'#([?&]upload_id=)[^\s&\'"]+#i',
 		);

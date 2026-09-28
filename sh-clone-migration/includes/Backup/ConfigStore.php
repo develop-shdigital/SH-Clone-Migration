@@ -60,7 +60,8 @@ final class ConfigStore {
 	 * @throws \InvalidArgumentException When the name is not a plain slug.
 	 */
 	public function path( $name ) {
-		if ( ! is_string( $name ) || ! preg_match( '/^[a-z0-9][a-z0-9-]{0,63}$/', $name ) ) {
+		// \z, not $: "$" also matches before a trailing newline.
+		if ( ! is_string( $name ) || ! preg_match( '/^[a-z0-9][a-z0-9-]{0,63}\z/', $name ) ) {
 			throw new \InvalidArgumentException( 'Invalid configuration document name.' );
 		}
 		return $this->directory . '/' . $name . '.php';
@@ -155,16 +156,28 @@ final class ConfigStore {
 	/**
 	 * Delete a document.
 	 *
+	 * The lock file stays: removing it while another request holds or waits
+	 * for the lock would let a third request lock a new file of the same
+	 * name, and two read-modify-write cycles would then overlap. Like
+	 * update(), it must not be called from inside an update() mutator for
+	 * the same document: the lock is not re-entrant.
+	 *
 	 * @param string $name Document name.
 	 * @return void
 	 */
 	public function delete( $name ) {
 		$path = $this->path( $name );
+		$lock = is_file( $path . '.lock' ) ? @fopen( $path . '.lock', 'c' ) : false;
+		if ( $lock ) {
+			flock( $lock, LOCK_EX );
+		}
 		if ( is_file( $path ) ) {
 			@unlink( $path );
 		}
-		if ( is_file( $path . '.lock' ) ) {
-			@unlink( $path . '.lock' );
+		clearstatcache( true, $path );
+		if ( $lock ) {
+			flock( $lock, LOCK_UN );
+			fclose( $lock );
 		}
 	}
 

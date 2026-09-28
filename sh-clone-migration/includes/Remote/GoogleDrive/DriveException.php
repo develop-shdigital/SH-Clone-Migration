@@ -20,8 +20,8 @@ defined( 'ABSPATH' ) || defined( 'SHCM_ALLOW_STANDALONE' ) || exit;
  * history, printed by WP-CLI and sent in notification emails, none of which
  * pass through the log redactor. It therefore never contains tokens, the
  * client secret, an authorization code, an upload session URI or a response
- * body: only the HTTP status, Google's error reason and Google's short
- * error message, cleaned by safeText().
+ * body: only the HTTP status, Google's error reason (dropped when it contains
+ * a secret) and Google's short error message, cleaned by safeText().
  *
  * kind() tells callers what to do: RATE_LIMITED and SERVER are worth
  * retrying later (isRetryable()); everything else needs a person or a new
@@ -222,7 +222,7 @@ class DriveException extends \RuntimeException {
 	 *
 	 * @param HttpResponse $response Response.
 	 * @param string[]     $secrets  Secret values to remove.
-	 * @return array{0: string, 1: string} Reason and message ('' when unknown).
+	 * @return array{0: string, 1: string} Reason and message ('' when unknown or not safe to show).
 	 */
 	public static function describe(
 		HttpResponse $response,
@@ -260,7 +260,10 @@ class DriveException extends \RuntimeException {
 			}
 		}
 
-		if ( ! preg_match( '/^[A-Za-z0-9_.\-]{1,64}$/', $reason ) ) {
+		// The reason ends up in messages and in the stored connection error, so a
+		// value that is (or contains) a secret or a token shape is dropped whole:
+		// a client secret such as "GOCSPX-..." fits the character class.
+		if ( ! preg_match( '/^[A-Za-z0-9_.\-]{1,64}$/', $reason ) || self::safeText( $reason, $secrets ) !== $reason ) {
 			$reason = '';
 		}
 
@@ -293,10 +296,8 @@ class DriveException extends \RuntimeException {
 		$redactor = new Redactor();
 		foreach ( $secrets as $secret ) {
 			if ( is_string( $secret ) && '' !== $secret ) {
+				// Also registers the form- and URL-encoded forms.
 				$redactor->addLiteral( $secret );
-				// Secrets also show up form- or URL-encoded.
-				$redactor->addLiteral( rawurlencode( $secret ) );
-				$redactor->addLiteral( urlencode( $secret ) );
 			}
 		}
 		$text = $redactor->scrub( $text );

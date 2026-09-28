@@ -362,6 +362,8 @@ class Controller {
 		$data['stage_list'] = $stages;
 		$data['background'] = (bool) $job->param( 'background' );
 		$data['busy']       = (bool) $job->runtime( 'busy', false );
+		$runner             = $this->plugin->runner();
+		$data['cancel_requested'] = method_exists( $runner, 'cancelRequested' ) && ! $job->isFinished() && $runner->cancelRequested( $job );
 
 		if ( $details ) {
 			$data['report'] = array(

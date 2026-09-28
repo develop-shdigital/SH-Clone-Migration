@@ -130,6 +130,12 @@ final class Client {
 	 * unique, so the folder is recognised by its appProperties
 	 * (shcm_role=backup_root, shcm_site=<site id>), not by its name.
 	 *
+	 * Search and create are not atomic: two requests (the upload stage and
+	 * the settings screen's test) can both find nothing and both create a
+	 * folder. After creating, the search runs again and every process picks
+	 * the same winner (oldest createdTime, then lowest id). A losing folder of
+	 * our own is deleted when it is still empty, and the winner is returned.
+	 *
 	 * @param string $site_id  Site id (Connection::siteId()).
 	 * @param string $name     Name for a new folder.
 	 * @param string $known_id Folder id remembered from last time, if any.
@@ -167,33 +173,17 @@ final class Client {
 			}
 		}
 
-		$query    = "mimeType = '" . self::FOLDER_MIME . "' and trashed = false"
-			. " and appProperties has { key='shcm_role' and value='backup_root' }"
-			. " and appProperties has { key='shcm_site' and value=" . self::quote( $site_id ) . ' }';
-		$response = $this->authorized(
-			'GET',
-			$this->apiUrl(
-				'/files',
-				array(
-					'q'        => $query,
-					'spaces'   => 'drive',
-					'orderBy'  => 'createdTime',
-					'pageSize' => 10,
-					'fields'   => 'files(id,name,createdTime)',
-				)
-			)
-		);
-		$json = $this->expectJson( $response );
-		if ( ! empty( $json['files'][0]['id'] ) ) {
+		$winner = self::oldestFolder( $this->findFolders( $site_id ) );
+		if ( null !== $winner ) {
 			return array(
-				'id'   => (string) $json['files'][0]['id'],
-				'name' => isset( $json['files'][0]['name'] ) ? (string) $json['files'][0]['name'] : '',
+				'id'   => $winner['id'],
+				'name' => $winner['name'],
 			);
 		}
 
 		$response = $this->authorized(
 			'POST',
-			$this->apiUrl( '/files', array( 'fields' => 'id,name' ) ),
+			$this->apiUrl( '/files', array( 'fields' => 'id,name,createdTime' ) ),
 			array( 'Content-Type' => 'application/json; charset=UTF-8' ),
 			self::encode(
 				array(
@@ -210,10 +200,152 @@ final class Client {
 		if ( empty( $json['id'] ) ) {
 			throw new DriveException( DriveException::SERVER, 'Google Drive did not return the id of the new backup folder.', $response->status );
 		}
-		return array(
-			'id'   => (string) $json['id'],
-			'name' => isset( $json['name'] ) ? (string) $json['name'] : $name,
+		$ours = array(
+			'id'      => (string) $json['id'],
+			'name'    => isset( $json['name'] ) ? (string) $json['name'] : $name,
+			'created' => isset( $json['createdTime'] ) && is_string( $json['createdTime'] ) ? $json['createdTime'] : '',
 		);
+
+		return $this->settleFolderRace( $site_id, $ours );
+	}
+
+	/**
+	 * After creating a folder, look again for competing ones and agree on one.
+	 *
+	 * Our own folder counts even when the search does not list it yet (Drive's
+	 * search can trail a create by a moment). Failures here never fail the
+	 * call: our folder exists and is usable, the worst case is the duplicate
+	 * the search was meant to avoid.
+	 *
+	 * @param string $site_id Site id.
+	 * @param array  $ours    The folder just created: id, name, created (RFC 3339 or '').
+	 * @return array{id: string, name: string}
+	 */
+	private function settleFolderRace( $site_id, array $ours ) {
+		$result = array(
+			'id'   => $ours['id'],
+			'name' => $ours['name'],
+		);
+		try {
+			$candidates = array( $ours );
+			foreach ( $this->findFolders( $site_id ) as $folder ) {
+				if ( $folder['id'] !== $ours['id'] ) {
+					$candidates[] = $folder;
+				}
+			}
+			$winner = self::oldestFolder( $candidates );
+			if ( null === $winner || $winner['id'] === $ours['id'] ) {
+				return $result;
+			}
+			$result = array(
+				'id'   => $winner['id'],
+				'name' => $winner['name'],
+			);
+			// Another request may already have found our folder and put a file in
+			// it; only an empty loser is removed.
+			$children = $this->expectJson(
+				$this->authorized(
+					'GET',
+					$this->apiUrl(
+						'/files',
+						array(
+							'q'        => self::quote( $ours['id'] ) . ' in parents',
+							'pageSize' => 1,
+							'fields'   => 'files(id)',
+						)
+					)
+				)
+			);
+			if ( empty( $children['files'] ) ) {
+				$this->deleteFile( $ours['id'] );
+			}
+		} catch ( DriveException $e ) {
+			// Keep whichever folder was decided on; a leftover empty folder is harmless.
+			return $result;
+		}
+		return $result;
+	}
+
+	/**
+	 * This site's backup folders, as the search returns them.
+	 *
+	 * @param string $site_id Site id.
+	 * @return array<int, array{id: string, name: string, created: string}>
+	 * @throws DriveException On failure.
+	 */
+	private function findFolders( $site_id ) {
+		$query = "mimeType = '" . self::FOLDER_MIME . "' and trashed = false"
+			. " and appProperties has { key='shcm_role' and value='backup_root' }"
+			. " and appProperties has { key='shcm_site' and value=" . self::quote( $site_id ) . ' }';
+		$json  = $this->expectJson(
+			$this->authorized(
+				'GET',
+				$this->apiUrl(
+					'/files',
+					array(
+						'q'        => $query,
+						'spaces'   => 'drive',
+						'orderBy'  => 'createdTime',
+						'pageSize' => 10,
+						'fields'   => 'files(id,name,createdTime)',
+					)
+				)
+			)
+		);
+		$folders = array();
+		if ( isset( $json['files'] ) && is_array( $json['files'] ) ) {
+			foreach ( $json['files'] as $file ) {
+				if ( is_array( $file ) && ! empty( $file['id'] ) && is_scalar( $file['id'] ) ) {
+					$folders[] = array(
+						'id'      => (string) $file['id'],
+						'name'    => isset( $file['name'] ) && is_scalar( $file['name'] ) ? (string) $file['name'] : '',
+						'created' => isset( $file['createdTime'] ) && is_string( $file['createdTime'] ) ? $file['createdTime'] : '',
+					);
+				}
+			}
+		}
+		return $folders;
+	}
+
+	/**
+	 * The folder every process agrees on: the oldest createdTime, ties (two
+	 * creates in the same millisecond) broken by the lowest id. The order of
+	 * the search results is not used: equal createdTimes come back in any order.
+	 *
+	 * @param array $folders Folders: id, name, created.
+	 * @return array|null
+	 */
+	private static function oldestFolder( array $folders ) {
+		$best     = null;
+		$best_key = '';
+		foreach ( $folders as $folder ) {
+			$key = self::createdKey( $folder['created'] );
+			if ( null === $best || $key < $best_key || ( $key === $best_key && strcmp( $folder['id'], $best['id'] ) < 0 ) ) {
+				$best     = $folder;
+				$best_key = $key;
+			}
+		}
+		return $best;
+	}
+
+	/**
+	 * A sortable key for an RFC 3339 createdTime, with sub-second precision
+	 * (strtotime() drops the milliseconds). Unknown times sort last.
+	 *
+	 * @param string $time createdTime.
+	 * @return string
+	 */
+	private static function createdKey( $time ) {
+		if ( ! preg_match( '/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+\-]\d{2}:\d{2})$/i', (string) $time, $match ) ) {
+			return '~';
+		}
+		$seconds = strtotime( $match[1] . ( 'z' === strtolower( $match[3] ) ? 'Z' : $match[3] ) );
+		if ( false === $seconds ) {
+			return '~';
+		}
+		$fraction = isset( $match[2] ) ? str_pad( $match[2], 9, '0' ) : '000000000';
+		// Offset so that dates before 1970 still sort as fixed-width digits.
+		return sprintf( '%015d.%s', $seconds + 100000000000, $fraction );
 	}
 
 	/**
@@ -703,6 +835,11 @@ final class Client {
 		$secrets = $this->oauth->connection()->secrets();
 		if ( is_string( $extra ) && '' !== $extra ) {
 			$secrets[] = $extra;
+			// The upload id alone is enough to use the session.
+			parse_str( (string) parse_url( $extra, PHP_URL_QUERY ), $query );
+			if ( isset( $query['upload_id'] ) && is_string( $query['upload_id'] ) && '' !== $query['upload_id'] ) {
+				$secrets[] = $query['upload_id'];
+			}
 		}
 		return $secrets;
 	}

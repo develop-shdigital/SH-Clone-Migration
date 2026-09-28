@@ -369,7 +369,10 @@
 			return job;
 		}
 
-		return sleep( 250 )
+		// A background job (a backup) is also driven by the server itself;
+		// the page only needs to look in now and then, and takes over when
+		// loopback requests do not get through.
+		return sleep( job.background ? 2000 : 250 )
 			.then( function () {
 				return tick( self.jobId, self.password, self.options.useEndpoint, self.token );
 			} )
@@ -389,6 +392,12 @@
 		this.stopped = true;
 		return api( 'cancel', { job_id: this.jobId, job_token: this.token } ).then( function ( job ) {
 			self.view.render( job );
+			if ( job.status !== 'cancelled' && job.status !== 'completed' && job.status !== 'failed' ) {
+				// Another request is working on the job; it stops at its next
+				// checkpoint. Keep watching until it has.
+				self.stopped = false;
+				return self.loop( job );
+			}
 			if ( self.options.onFinish ) {
 				self.options.onFinish( job );
 			}
@@ -1234,11 +1243,479 @@
 
 	/* ----------------------------------------------------------------- boot */
 
+	/* ----------------------------------------------------- scheduled backups */
+
+	function initSchedules() {
+		var form = $( '#shcm-schedule-form' );
+		var dataNode = $( '#shcm-schedule-data' );
+		if ( ! form || ! dataNode ) {
+			return;
+		}
+
+		var status = {};
+		try {
+			status = JSON.parse( dataNode.textContent );
+		} catch ( e ) {
+			status = {};
+		}
+
+		var runner = new JobRunner( {
+			view: new ProgressView( $( '#shcm-progress-panel' ) ),
+			onFinish: function ( job ) {
+				showResult( renderBackupResult( job ), job.status === 'completed' ? 'ok' : 'error' );
+				$( '#shcm-backup-now' ).disabled = false;
+				refresh();
+			},
+			onError: function ( error ) {
+				showResult( '<div class="shcm-alert shcm-alert--error">' + escapeHtml( error.message ) + '</div>', 'error' );
+				$( '#shcm-backup-now' ).disabled = false;
+				refresh();
+			}
+		} );
+
+		function refresh() {
+			return api( 'backup_status', {} ).then( function ( next ) {
+				status = next;
+				render();
+			} ).catch( function () {} );
+		}
+
+		function feedback( node, message, isError ) {
+			if ( ! node ) {
+				return;
+			}
+			node.className = 'shcm-save-feedback' + ( isError ? ' is-error' : '' );
+			node.textContent = message;
+		}
+
+		function tag( text, tone ) {
+			return '<span class="shcm-tag' + ( tone ? ' shcm-tag--' + tone : '' ) + '">' + escapeHtml( text ) + '</span>';
+		}
+
+		function alertBox( level, html, action ) {
+			return '<div class="shcm-alert shcm-alert--' + level + '">' + html +
+				( action ? ' ' + action : '' ) + '</div>';
+		}
+
+		/* ---- rendering ---- */
+
+		function render() {
+			var schedule = status.schedule || {};
+			var drive = status.drive || {};
+			renderStats( schedule, drive );
+			renderAlerts( schedule, drive );
+			renderDrive( drive );
+			renderHistory( status.history || [] );
+			syncForm();
+		}
+
+		function renderStats( schedule, drive ) {
+			var history = status.history || [];
+			var local = history.filter( function ( row ) { return row.present && row.status !== 'failed'; } );
+			var localBytes = local.reduce( function ( sum, row ) { return sum + ( row.size || 0 ); }, 0 );
+			var remote = history.filter( function ( row ) { return row.remote && row.remote.status === 'uploaded'; } );
+			var last = schedule.last;
+			var next;
+			if ( ! schedule.identity_ok ) {
+				next = 'Paused';
+			} else if ( ( schedule.config || {} ).frequency === 'manual' ) {
+				next = 'On demand';
+			} else {
+				next = status.next_text || '—';
+			}
+			var lastText = '—';
+			if ( last ) {
+				lastText = ( { success: 'OK', partial: 'Not uploaded', failed: 'Failed', skipped: 'Skipped', cancelled: 'Cancelled' }[ last.status ] || last.status );
+			}
+			var tiles = [
+				[ next, schedule.describe || '' ],
+				[ lastText, last ? 'Last backup' : 'No backup yet', last && ( last.status === 'failed' || last.status === 'partial' ) ],
+				[ formatNumber( local.length ) + ' · ' + formatBytes( localBytes ), 'Kept on this server' ],
+				[ drive.state === 'connected' ? formatNumber( remote.length ) + ' on Drive' : ( drive.state === 'reconnect' ? 'Reconnect' : 'Not connected' ), 'Google Drive', drive.state === 'reconnect' ]
+			];
+			$( '#shcm-schedule-stats' ).innerHTML = tiles.map( function ( tile ) {
+				return '<div class="shcm-stat' + ( tile[ 2 ] ? ' shcm-stat--warn' : '' ) + '">' +
+					'<span class="shcm-stat__value">' + escapeHtml( tile[ 0 ] ) + '</span>' +
+					'<span class="shcm-stat__label">' + escapeHtml( tile[ 1 ] ) + '</span></div>';
+			} ).join( '' );
+		}
+
+		function renderAlerts( schedule, drive ) {
+			var config = schedule.config || {};
+			var cron = schedule.cron || {};
+			var html = '';
+			if ( ! schedule.main_site ) {
+				html += alertBox( 'info', 'Backups cover the whole network and are managed on the main site only.' );
+			}
+			if ( ! schedule.identity_ok ) {
+				html += alertBox( 'warning', '<strong>This schedule was set up on another copy of this site</strong> (the site was moved or cloned). It is paused here so that a copy never backs up into, or deletes from, the original site\'s storage.',
+					'<button type="button" class="button button-small" data-action="adopt">This is the same site: resume backups</button>' );
+			}
+			if ( drive.state === 'reconnect' ) {
+				html += alertBox( 'error', '<strong>Google Drive needs to be reconnected.</strong> ' + escapeHtml( drive.error || '' ),
+					'<button type="button" class="button button-small" data-action="connect">Reconnect</button>' );
+			} else if ( drive.state === 'other_site' ) {
+				html += alertBox( 'warning', 'The Google Drive connection belongs to another copy of this site. Confirm this is the same site, or disconnect and connect this site\'s own account.',
+					'<button type="button" class="button button-small" data-action="adopt">This is the same site</button>' );
+			} else if ( config.gdrive && drive.state !== 'connected' ) {
+				html += alertBox( 'warning', 'Backups are set to go to Google Drive, but Google Drive is not connected. They are kept on this server until it is.' );
+			}
+			if ( config.encrypt && ! schedule.has_password ) {
+				html += alertBox( 'error', 'Encrypted backups are on, but no readable password is stored (wp-config.php may have changed). Enter the password again and save.' );
+			}
+			if ( schedule.overdue ) {
+				html += alertBox( 'warning', 'The last scheduled backup is overdue. WP-Cron only runs when the site has visitors; see the note about a system cron job below.' );
+			}
+			if ( cron.disabled ) {
+				html += alertBox( 'info', 'WP-Cron is disabled on this site (DISABLE_WP_CRON). Scheduled backups run only if a system cron job runs <code>wp shcm backup run</code> (or wp-cron.php) regularly.' );
+			}
+			if ( cron.loopback_blocked ) {
+				html += alertBox( 'warning', 'This site cannot call itself (loopback requests are blocked, for example by HTTP authentication). Backups still run, but only one step per minute through WP-Cron, so they take much longer.' );
+			}
+			$( '#shcm-schedule-alerts' ).innerHTML = html;
+		}
+
+		function renderDrive( drive ) {
+			var box = $( '#shcm-gdrive-status' );
+			var actions = $( '#shcm-gdrive-actions' );
+			var setup = $( '#shcm-gdrive-setup' );
+			var html = '';
+			var buttons = '';
+			if ( drive.state === 'connected' ) {
+				html = '<table class="widefat shcm-summary"><tbody>' +
+					'<tr><th scope="row">Account</th><td>' + escapeHtml( drive.account || '—' ) + '</td></tr>' +
+					'<tr><th scope="row">Folder</th><td>' + escapeHtml( drive.folder || 'Created at the first upload' ) + '</td></tr>' +
+					( drive.quota ? '<tr><th scope="row">Storage</th><td>' + formatBytes( drive.quota.usage ) + ' used' + ( drive.quota.limit ? ' of ' + formatBytes( drive.quota.limit ) : '' ) + '</td></tr>' : '' ) +
+					'</tbody></table>';
+				buttons = '<button type="button" class="button" data-action="test">Test connection</button>' +
+					'<button type="button" class="button" data-action="list">Show backups on Drive</button>' +
+					'<button type="button" class="button button-link-delete" data-action="disconnect">Disconnect</button>';
+				setup.classList.add( 'shcm-hidden' );
+			} else {
+				if ( drive.state === 'reconnect' ) {
+					html = alertBox( 'error', escapeHtml( drive.error || 'The connection stopped working.' ) );
+				} else if ( drive.state === 'other_site' ) {
+					html = alertBox( 'warning', 'Connected on another copy of this site.' );
+				} else {
+					html = '<p>Not connected. Follow the steps below once; afterwards backups upload automatically.</p>';
+				}
+				if ( drive.state === 'reconnect' || drive.state === 'other_site' ) {
+					buttons = '<button type="button" class="button button-link-delete" data-action="disconnect">Disconnect</button>';
+				}
+				setup.classList.remove( 'shcm-hidden' );
+			}
+			box.innerHTML = html + '<p class="shcm-save-feedback" id="shcm-gdrive-message" role="status"></p>';
+			actions.innerHTML = buttons;
+			var connect = $( '#shcm-gdrive-connect' );
+			if ( connect ) {
+				connect.textContent = drive.state === 'reconnect' || drive.state === 'other_site' ? 'Reconnect Google Drive' : 'Connect Google Drive';
+			}
+		}
+
+		function statusPill( row ) {
+			var map = { success: [ 'completed', 'OK' ], partial: [ 'partial', 'Not uploaded' ], failed: [ 'failed', 'Failed' ], running: [ 'running', 'Running' ], skipped: [ 'cancelled', 'Skipped' ], cancelled: [ 'cancelled', 'Cancelled' ] };
+			var entry = map[ row.status ] || [ 'pending', row.status || '?' ];
+			return '<span class="shcm-status shcm-status--' + entry[ 0 ] + '">' + escapeHtml( entry[ 1 ] ) + '</span>';
+		}
+
+		function driveCell( row ) {
+			var remote = row.remote || {};
+			switch ( remote.status ) {
+				case 'uploaded':
+					return tag( 'Uploaded', 'ok' ) + ( remote.link ? ' <a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">Open</a>' : '' );
+				case 'pending':
+					return tag( 'Uploading' );
+				case 'deleted':
+					return tag( 'Removed (retention)' );
+				case 'failed':
+					return tag( 'Failed', 'danger' ) + ( remote.error ? '<br><span class="description">' + escapeHtml( remote.error ) + '</span>' : '' ) +
+						( row.present ? '<br><button type="button" class="button button-small" data-action="retry" data-history="' + escapeHtml( row.id ) + '">Retry upload</button>' : '' );
+				case 'off':
+				case undefined:
+					return '—';
+				default:
+					return escapeHtml( remote.status );
+			}
+		}
+
+		function renderHistory( rows ) {
+			var box = $( '#shcm-schedule-history' );
+			if ( ! rows.length ) {
+				box.innerHTML = '<p class="shcm-empty">No backups yet. Click "Back Up Now" or set a schedule.</p>';
+				return;
+			}
+			var labels = { schedule: 'Schedule', manual: 'Back up now', cli: 'WP-CLI' };
+			var contents = { full: 'Database + files', database: 'Database', files: 'Files' };
+			box.innerHTML = '<div class="shcm-table-scroll"><table class="widefat striped shcm-table" id="shcm-schedule-history-table"><thead><tr>' +
+				'<th>Date</th><th>Started by</th><th>Status</th><th>Contents</th><th>Size</th><th>This server</th><th>Google Drive</th><th></th>' +
+				'</tr></thead><tbody>' + rows.map( function ( row ) {
+					var local = row.present
+						? tag( 'Kept', 'ok' ) + ( row.download ? ' <a href="' + escapeHtml( row.download ) + '">Download</a>' : '' )
+						: ( row.status === 'success' || row.status === 'partial' ? tag( 'Removed (retention)' ) : '—' );
+					return '<tr data-job="' + escapeHtml( row.id ) + '">' +
+						'<td>' + escapeHtml( row.date ) + '</td>' +
+						'<td>' + escapeHtml( labels[ row.trigger ] || row.trigger || '' ) + '</td>' +
+						'<td>' + statusPill( row ) + ( row.error && row.status !== 'partial' ? '<br><span class="description">' + escapeHtml( row.error ) + '</span>' : '' ) +
+						( row.warnings ? '<br><span class="description">' + formatNumber( row.warnings ) + ' warning(s)</span>' : '' ) + '</td>' +
+						'<td>' + escapeHtml( contents[ row.contents ] || row.contents || '' ) + ( row.encrypted ? ' ' + tag( 'encrypted', 'lock' ) : '' ) + '</td>' +
+						'<td>' + ( row.size ? formatBytes( row.size ) : '—' ) + '</td>' +
+						'<td>' + local + '</td>' +
+						'<td>' + driveCell( row ) + '</td>' +
+						'<td class="shcm-actions">' + ( row.job ? '<a class="button button-small" href="' + escapeHtml( data.logUrl + '&job_id=' + encodeURIComponent( row.job ) ) + '">Log</a>' : '' ) + '</td>' +
+						'</tr>';
+				} ).join( '' ) + '</tbody></table></div>';
+		}
+
+		function syncForm() {
+			var frequency = $( '#shcm-frequency' ).value;
+			$$( '.shcm-when', form ).forEach( function ( node ) {
+				var show = ( node.getAttribute( 'data-show-for' ) || '' ).split( ' ' ).indexOf( frequency ) !== -1;
+				node.classList.toggle( 'shcm-hidden', ! show );
+			} );
+			var gdrive = $( '#shcm-gdrive-toggle' ).checked;
+			$$( '.shcm-gdrive-only', form ).forEach( function ( node ) {
+				node.classList.toggle( 'shcm-hidden', ! gdrive );
+			} );
+			var encrypt = $( '#shcm-encrypt-toggle' );
+			$$( '.shcm-encrypt-only', form ).forEach( function ( node ) {
+				node.classList.toggle( 'shcm-hidden', ! ( encrypt && encrypt.checked ) );
+			} );
+			var driveOk = ( status.drive || {} ).state === 'connected';
+			var nowDrive = $( '#shcm-backup-now-drive' );
+			nowDrive.disabled = ! driveOk;
+			$( '#shcm-backup-now-drive-label' ).classList.toggle( 'shcm-muted', ! driveOk );
+			if ( ! driveOk ) {
+				nowDrive.checked = false;
+			}
+		}
+
+		function renderBackupResult( job ) {
+			var report = job.report || {};
+			var remote = report.remote_upload || null;
+			var html = '';
+			if ( job.status === 'completed' ) {
+				if ( report.backup && report.backup.gdrive && ( ! remote || remote.status !== 'uploaded' ) ) {
+					html += '<div class="shcm-alert shcm-alert--warning"><strong>' + escapeHtml( strings.backupPartial || '' ) + '.</strong> ' +
+						escapeHtml( remote && remote.error ? remote.error : '' ) + '</div>';
+				} else {
+					html += '<div class="shcm-alert shcm-alert--success"><strong>' +
+						escapeHtml( report.archive ? strings.backupDone : strings.uploadDone ) + '.</strong>' +
+						( remote && remote.status === 'uploaded' ? ' Uploaded to Google Drive and verified' + ( remote.link ? ' (<a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">open</a>)' : '' ) + '.' : '' ) +
+						'</div>';
+				}
+				if ( report.archive_size ) {
+					html += renderArchiveSummary( job );
+				}
+			} else if ( job.status === 'cancelled' ) {
+				html += '<div class="shcm-alert shcm-alert--warning">Cancelled.</div>';
+			} else {
+				html += '<div class="shcm-alert shcm-alert--error"><strong>' + escapeHtml( strings.backupFailed || '' ) + ':</strong> ' +
+					escapeHtml( job.error && job.error.message ? job.error.message : '' ) + '</div>';
+			}
+			return html + renderWarnings( job );
+		}
+
+		/* ---- actions ---- */
+
+		function collectSchedule() {
+			var payload = {};
+			$$( 'input, select, textarea', form ).forEach( function ( field ) {
+				if ( ! field.name ) {
+					return;
+				}
+				payload[ field.name ] = field.type === 'checkbox' ? field.checked : field.value;
+			} );
+			return payload;
+		}
+
+		form.addEventListener( 'change', syncForm );
+		form.addEventListener( 'submit', function ( event ) {
+			event.preventDefault();
+			var node = $( '#shcm-schedule-feedback' );
+			var request = { schedule: collectSchedule() };
+			var password = $( '#shcm-backup-password' );
+			var confirm = $( '#shcm-backup-password-confirm' );
+			if ( password && password.value !== '' ) {
+				if ( password.value !== confirm.value ) {
+					feedback( node, strings.passwordMismatch, true );
+					return;
+				}
+				request.set_password = true;
+				request.password = password.value;
+			}
+			feedback( node, '…' );
+			api( 'save_schedule', request ).then( function ( next ) {
+				status = next;
+				if ( password ) {
+					password.value = '';
+					confirm.value = '';
+				}
+				render();
+				feedback( node, strings.saved + ( status.next_text ? ' Next backup: ' + status.next_text + '.' : '' ) );
+			} ).catch( function ( error ) {
+				feedback( node, error.message, true );
+			} );
+		} );
+
+		$( '#shcm-backup-now' ).addEventListener( 'click', function () {
+			this.disabled = true;
+			$( '#shcm-result-panel' ).classList.add( 'shcm-hidden' );
+			runner.start( 'start_backup', { gdrive: $( '#shcm-backup-now-drive' ).checked } );
+		} );
+
+		$( '#shcm-cancel-job' ).addEventListener( 'click', function () {
+			if ( window.confirm( strings.confirmCancel ) ) {
+				runner.cancel();
+			}
+		} );
+
+		function connect() {
+			var node = $( '#shcm-gdrive-feedback' );
+			feedback( node, '…' );
+			return api( 'gdrive_connect', {} ).then( function ( result ) {
+				window.location.href = result.url;
+			} ).catch( function ( error ) {
+				feedback( node, error.message, true );
+			} );
+		}
+
+		$( '#shcm-gdrive-credentials' ).addEventListener( 'submit', function ( event ) {
+			event.preventDefault();
+			var node = $( '#shcm-gdrive-feedback' );
+			var drive = status.drive || {};
+			var id = $( '#shcm-gdrive-client-id' );
+			var secret = $( '#shcm-gdrive-client-secret' );
+			feedback( node, '…' );
+			var save = drive.from_constants
+				? Promise.resolve()
+				: api( 'gdrive_credentials', { client_id: id.value.trim(), client_secret: secret.value.trim() } );
+			save.then( function () {
+				secret.value = '';
+				return connect();
+			} ).catch( function ( error ) {
+				feedback( node, error.message, true );
+			} );
+		} );
+
+		document.addEventListener( 'click', function ( event ) {
+			var button = event.target.closest( '[data-action]' );
+			if ( ! button || ! $( '.shcm-wrap' ).contains( button ) ) {
+				return;
+			}
+			var action = button.getAttribute( 'data-action' );
+			var message = $( '#shcm-gdrive-message' );
+			switch ( action ) {
+				case 'connect':
+					connect();
+					break;
+				case 'adopt':
+					button.disabled = true;
+					api( 'backup_adopt', {} ).then( function ( next ) {
+						status = next;
+						render();
+					} ).catch( function ( error ) {
+						button.disabled = false;
+						window.alert( error.message );
+					} );
+					break;
+				case 'test':
+					feedback( message, '…' );
+					api( 'gdrive_test', {} ).then( function ( result ) {
+						status.drive = result.drive;
+						render();
+						feedback( $( '#shcm-gdrive-message' ), result.message );
+					} ).catch( function ( error ) {
+						feedback( message, error.message, true );
+						refresh();
+					} );
+					break;
+				case 'list':
+					listDrive( button );
+					break;
+				case 'disconnect':
+					if ( ! window.confirm( strings.confirmDisconnect ) ) {
+						return;
+					}
+					api( 'gdrive_disconnect', {} ).then( function ( next ) {
+						status = next;
+						render();
+					} ).catch( function ( error ) {
+						window.alert( error.message );
+					} );
+					break;
+				case 'retry':
+					$( '#shcm-result-panel' ).classList.add( 'shcm-hidden' );
+					runner.start( 'backup_upload', { history_id: button.getAttribute( 'data-history' ) } );
+					break;
+			}
+		} );
+
+		function listDrive( button ) {
+			var panel = $( '#shcm-gdrive-files' );
+			var box = $( '[data-role="files"]', panel );
+			panel.classList.remove( 'shcm-hidden' );
+			box.innerHTML = '<p>…</p>';
+			button.disabled = true;
+			api( 'gdrive_list', {} ).then( function ( result ) {
+				button.disabled = false;
+				if ( ! result.files.length ) {
+					box.innerHTML = '<p class="shcm-empty">No backups of this site on Google Drive yet.</p>';
+					return;
+				}
+				box.innerHTML = '<div class="shcm-table-scroll"><table class="widefat striped shcm-table"><thead><tr><th>Name</th><th>Date</th><th>Size</th><th></th></tr></thead><tbody>' +
+					result.files.map( function ( file ) {
+						return '<tr><td><code>' + escapeHtml( file.name ) + '</code>' + ( file.kind === 'manual' ? ' ' + tag( 'sent by hand' ) : '' ) + '</td>' +
+							'<td>' + escapeHtml( file.date ) + '</td><td>' + formatBytes( file.size ) + '</td>' +
+							'<td class="shcm-actions">' + ( file.link ? '<a class="button button-small" href="' + escapeHtml( file.link ) + '" target="_blank" rel="noopener noreferrer">Open in Drive</a>' : '' ) + '</td></tr>';
+					} ).join( '' ) + '</tbody></table></div>' +
+					'<p class="description">To restore one of these, download it from Google Drive and upload it on the Import screen.</p>';
+			} ).catch( function ( error ) {
+				button.disabled = false;
+				box.innerHTML = '<div class="shcm-alert shcm-alert--error">' + escapeHtml( error.message ) + '</div>';
+			} );
+		}
+
+		$$( '[data-copy]' ).forEach( function ( button ) {
+			button.addEventListener( 'click', function () {
+				var source = $( button.getAttribute( 'data-copy' ) );
+				var text = source ? source.textContent : '';
+				var done = function () {
+					button.textContent = strings.copied || 'Copied';
+				};
+				if ( navigator.clipboard && window.isSecureContext ) {
+					navigator.clipboard.writeText( text ).then( done );
+				} else {
+					var range = document.createRange();
+					range.selectNodeContents( source );
+					var selection = window.getSelection();
+					selection.removeAllRanges();
+					selection.addRange( range );
+					try {
+						document.execCommand( 'copy' );
+						done();
+					} catch ( e ) {
+						// Leave the text selected for a manual copy.
+					}
+				}
+			} );
+		} );
+
+		render();
+
+		// A backup that is already running (started by the schedule or in
+		// another tab): show its progress.
+		if ( status.schedule && status.schedule.running ) {
+			$( '#shcm-backup-now' ).disabled = true;
+			runner.resume( status.schedule.running, '' );
+		}
+	}
+
 	document.addEventListener( 'DOMContentLoaded', function () {
 		initExport();
 		initImport();
 		initBackups();
 		initTools();
 		initSettings();
+		initSchedules();
 	} );
 }() );

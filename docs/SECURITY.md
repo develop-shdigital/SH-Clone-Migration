@@ -11,8 +11,9 @@ what it defends against and how.
 | The site's own database and files | yes | Read as-is |
 | An uploaded or supplied `.wpress` archive | **no** | Validated at every step |
 | Admin form and AJAX input | **no** | Capability, nonce, sanitisation |
-| Migration passwords | secret | Never persisted |
-| `wp-config.php` | untouched | Never read for credentials, never written |
+| Migration passwords | secret | Never persisted (except the password of encrypted scheduled backups, sealed; see below) |
+| Google Drive tokens and client secret | secret | Sealed at rest in `shcm-storage/config/`, never in the database |
+| `wp-config.php` | untouched | Never written; its secret keys (constants) derive the key that seals stored secrets |
 
 ## Authorisation
 
@@ -169,13 +170,50 @@ Optional, and off by default.
 * **Nonces**: a fresh random nonce per block, stored with the block.
 * **Password verification**: the prologue holds an encrypted known plaintext,
   so a wrong password is rejected immediately.
-* **The password is never written down.** It is not in the job state, not in
-  the database, not in the log. It travels with each request and lives in the
-  browser tab for the life of the job. The consequence is deliberate: WP-Cron
-  cannot resume an encrypted job unattended.
+* **The password of a manual export is never written down.** It is not in the
+  job state, not in the database, not in the log. It travels with each request
+  and lives in the browser tab for the life of the job, so WP-Cron cannot
+  resume such a job unattended. Encrypted *scheduled* backups are the one
+  exception, by the owner's choice (see "Scheduled backups and Google Drive").
 * Keys are wiped with `sodium_memzero()` where available.
 
 Nothing here is home-grown. No custom cipher, no custom construction.
+
+## Scheduled backups and Google Drive
+
+* **Least privilege at Google.** The plugin requests only
+  `https://www.googleapis.com/auth/drive.file`: it can read, change and delete
+  only the files it created itself, never anything else in the user's Drive.
+  Each site uses the owner's own Google Cloud OAuth client; no third-party
+  service ever sees a token or a backup.
+* **OAuth callback.** The redirect URI is `admin-post.php`. The request must
+  carry a `state` that was issued to the same logged-in user less than 15
+  minutes earlier (a random 192-bit value, stored hashed, compared in constant
+  time, usable once), and the user must have the plugin's capability. A
+  replayed callback cannot break a working connection. Disconnecting revokes
+  the grant at Google.
+* **Secrets at rest.** The client secret, the refresh and access tokens, the
+  upload session URI (itself a credential) and the password of encrypted
+  backups are sealed with XChaCha20-Poly1305 or AES-256-GCM under keys derived
+  by HKDF-SHA256 from the secret keys in `wp-config.php`, one key per field.
+  They are kept in `wp-content/shcm-storage/config/`, never in the database,
+  so they are never part of an export, an import or a rollback point. When the
+  salts are missing from `wp-config.php` the key has to come from salts in the
+  database; System Status says so. `SHCM_SECRET_KEY` can supply a dedicated key.
+* **Stored backup password.** An exception to "migration passwords are never
+  stored": unattended encrypted backups need the password. It is stored only
+  when the owner switches encryption on, sealed as above, and can be removed
+  by switching encryption off.
+* **Copies of the site.** A copy made by other means cannot use the original's
+  connection or run its schedule until an administrator confirms (see
+  ARCHITECTURE.md, "Scheduled backups").
+* **Loopback requests.** The background runner's requests to
+  `admin-ajax.php` are authenticated by an HMAC of the job id; they can only
+  advance that job, which is locked against concurrent ticks.
+* **Logs.** Tokens, secrets, authorization codes and session URIs are
+  registered with the log redactor the moment they are opened or received, and
+  Google-specific token shapes are scrubbed by pattern as well. Error messages
+  from Google are filtered before they are stored or shown.
 
 ## Logging
 

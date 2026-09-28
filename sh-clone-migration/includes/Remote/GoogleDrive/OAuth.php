@@ -33,6 +33,12 @@ final class OAuth {
 	const CLIENT_ERRORS = array( 'invalid_client', 'unauthorized_client', 'deleted_client' );
 
 	/**
+	 * Reason of the exception for a refresh rejected for a grant that another
+	 * request replaced (or removed) while the refresh was in flight.
+	 */
+	const GRANT_REPLACED = 'grant_replaced';
+
+	/**
 	 * Connection.
 	 *
 	 * @var Connection
@@ -137,7 +143,7 @@ final class OAuth {
 				'redirect_uri'  => (string) $redirect_uri,
 				'grant_type'    => 'authorization_code',
 			),
-			false
+			null
 		);
 
 		$refresh = isset( $payload['refresh_token'] ) && is_string( $payload['refresh_token'] ) ? $payload['refresh_token'] : '';
@@ -167,42 +173,58 @@ final class OAuth {
 	/**
 	 * A valid access token, refreshed when it expires within a minute.
 	 *
+	 * The refresh result is stored only while the stored grant is still the
+	 * one that was used (compare-and-set). When another request connected
+	 * again or disconnected during the round trip, the result belongs to the
+	 * old grant: it is dropped and the current state is used instead, once.
+	 *
 	 * @param bool $force Refresh even if the stored token is still valid (after a 401).
 	 * @return string
 	 * @throws DriveException When the connection is not usable or the refresh fails.
 	 */
 	public function accessToken( $force = false ) {
-		$this->assertUsable();
+		for ( $attempt = 0; ; $attempt++ ) {
+			$this->assertUsable();
 
-		if ( ! $force ) {
-			$cached = $this->connection->accessToken();
-			if ( null !== $cached ) {
-				return $cached;
+			// A retry follows a new grant, whose fresh access token is cached.
+			if ( ! $force || $attempt > 0 ) {
+				$cached = $this->connection->accessToken();
+				if ( null !== $cached ) {
+					return $cached;
+				}
+			}
+
+			$refresh = $this->connection->refreshToken();
+			if ( null === $refresh ) {
+				throw new DriveException( DriveException::AUTH_REVOKED, 'The Google Drive authorization is missing. Reconnect Google Drive.' );
+			}
+
+			try {
+				$payload = $this->tokenRequest(
+					array(
+						'client_id'     => $this->connection->clientId(),
+						'client_secret' => $this->connection->clientSecret(),
+						'grant_type'    => 'refresh_token',
+						'refresh_token' => $refresh,
+					),
+					$refresh
+				);
+			} catch ( DriveException $e ) {
+				if ( self::GRANT_REPLACED === $e->reason() && 0 === $attempt ) {
+					continue;
+				}
+				throw $e;
+			}
+
+			// Google does not rotate refresh tokens today; keep one if it ever does.
+			$rotated = isset( $payload['refresh_token'] ) && is_string( $payload['refresh_token'] ) && $payload['refresh_token'] !== $refresh
+				? $payload['refresh_token']
+				: '';
+			if ( $this->connection->storeAccessToken( $payload['access_token'], self::lifetime( $payload ), $rotated, $refresh ) || $attempt > 0 ) {
+				// After a second lost race the token is still valid for the grant it came from; it is just not cached.
+				return $payload['access_token'];
 			}
 		}
-
-		$refresh = $this->connection->refreshToken();
-		if ( null === $refresh ) {
-			throw new DriveException( DriveException::AUTH_REVOKED, 'The Google Drive authorization is missing. Reconnect Google Drive.' );
-		}
-
-		$payload = $this->tokenRequest(
-			array(
-				'client_id'     => $this->connection->clientId(),
-				'client_secret' => $this->connection->clientSecret(),
-				'grant_type'    => 'refresh_token',
-				'refresh_token' => $refresh,
-			),
-			true
-		);
-
-		// Google does not rotate refresh tokens today; keep one if it ever does.
-		$rotated = isset( $payload['refresh_token'] ) && is_string( $payload['refresh_token'] ) && $payload['refresh_token'] !== $refresh
-			? $payload['refresh_token']
-			: '';
-		$this->connection->storeAccessToken( $payload['access_token'], self::lifetime( $payload ), $rotated );
-
-		return $payload['access_token'];
 	}
 
 	/**
@@ -292,15 +314,16 @@ final class OAuth {
 	/**
 	 * POST to the token endpoint.
 	 *
-	 * @param array $params     Form parameters.
-	 * @param bool  $refreshing Whether this is a refresh (errors then change the connection state).
+	 * @param array       $params       Form parameters.
+	 * @param string|null $used_refresh The refresh token of a refresh (errors then change the connection state); null for a code exchange.
 	 * @return array Token response with a non-empty 'access_token'.
 	 * @throws DriveException On any failure.
 	 */
 	private function tokenRequest(
 		#[\SensitiveParameter]
 		array $params,
-		$refreshing
+		#[\SensitiveParameter]
+		$used_refresh
 	) {
 		$response = $this->http->request(
 			'POST',
@@ -325,20 +348,25 @@ final class OAuth {
 			throw new DriveException( DriveException::SERVER, 'Google\'s sign-in service sent an answer without an access token. Try again later.', 200, 'no_access_token' );
 		}
 
-		throw $this->tokenError( $response, $refreshing );
+		throw $this->tokenError( $response, $used_refresh );
 	}
 
 	/**
 	 * Map a failed token endpoint response, updating the connection state
 	 * when the grant or the client is unusable.
 	 *
-	 * @param HttpResponse $response   Response.
-	 * @param bool         $refreshing Whether this was a refresh.
+	 * @param HttpResponse $response     Response.
+	 * @param string|null  $used_refresh The refresh token of a refresh; null for a code exchange.
 	 * @return DriveException
 	 */
-	private function tokenError( HttpResponse $response, $refreshing ) {
-		$secrets = $this->connection->secrets();
-		$status  = (int) $response->status;
+	private function tokenError(
+		HttpResponse $response,
+		#[\SensitiveParameter]
+		$used_refresh
+	) {
+		$secrets    = $this->connection->secrets();
+		$status     = (int) $response->status;
+		$refreshing = null !== $used_refresh;
 
 		if ( 0 === $status ) {
 			$detail = DriveException::safeText( $response->error, $secrets );
@@ -384,7 +412,9 @@ final class OAuth {
 				'Google Drive access was revoked or has expired (%s). Reconnect Google Drive. If the Google Cloud app is still in "Testing" mode, publish it ("In production"): Google ends the authorizations of apps in testing after 7 days.',
 				$label
 			);
-			$this->connection->markReconnect( $message );
+			if ( ! $this->connection->markReconnect( $message, $used_refresh ) ) {
+				return self::grantReplaced( $status );
+			}
 			return new DriveException( DriveException::AUTH_REVOKED, $message, $status, $reason );
 		}
 
@@ -394,7 +424,9 @@ final class OAuth {
 				'Google rejected the OAuth client (%s). Check the client ID and client secret in the Google Drive settings, then reconnect.',
 				$label
 			);
-			$this->connection->markReconnect( $message );
+			if ( ! $this->connection->markReconnect( $message, $used_refresh ) ) {
+				return self::grantReplaced( $status );
+			}
 			return new DriveException( DriveException::CLIENT_INVALID, $message, $status, $reason );
 		}
 
@@ -406,6 +438,23 @@ final class OAuth {
 			sprintf( 'Google rejected the sign-in request (%s).%s', $label, $hint ),
 			$status,
 			$reason
+		);
+	}
+
+	/**
+	 * The error for a refresh that Google rejected after another request had
+	 * already replaced or removed the grant it used: the current connection is
+	 * not affected, so this is temporary (and accessToken() retries once).
+	 *
+	 * @param int $status HTTP status of the rejection.
+	 * @return DriveException
+	 */
+	private static function grantReplaced( $status ) {
+		return new DriveException(
+			DriveException::SERVER,
+			'The Google Drive authorization changed while it was being renewed. Try again.',
+			$status,
+			self::GRANT_REPLACED
 		);
 	}
 

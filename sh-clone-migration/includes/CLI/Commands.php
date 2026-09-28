@@ -12,7 +12,6 @@ use SHCM\Archive\Catalog;
 use SHCM\Archive\Reader;
 use SHCM\Archive\Verifier;
 use SHCM\Core\Plugin;
-use SHCM\Jobs\Budget;
 use SHCM\Jobs\Job;
 use SHCM\Support\Bytes;
 
@@ -26,6 +25,8 @@ defined( 'ABSPATH' ) || exit;
  * to completion in a single invocation.
  */
 class Commands {
+
+	use DrivesJobs;
 
 	/**
 	 * Plugin container.
@@ -703,73 +704,6 @@ class Commands {
 				\WP_CLI::line( '! ' . $warning['message'] );
 			}
 		}
-	}
-
-	/**
-	 * Run a job to completion, printing progress.
-	 *
-	 * @param string $job_id   Job id.
-	 * @param string $password Migration password.
-	 * @param bool   $progress Whether to print progress.
-	 * @return array Final job snapshot.
-	 */
-	protected function drive( $job_id, $password, $progress = true ) {
-		$store  = $this->plugin->jobs();
-		$runner = $this->plugin->runner();
-		$last   = '';
-
-		while ( true ) {
-			$job = $store->load( $job_id );
-			if ( null === $job ) {
-				\WP_CLI::error( 'That migration job no longer exists.' );
-			}
-			if ( $job->isFinished() ) {
-				return $this->controller->snapshot( $job );
-			}
-
-			$job->setRuntime( 'password', $password );
-			$job = $runner->tick( $job, $this->budget() );
-
-			$line = sprintf( '[%5.1f%%] %s', (float) $job->get( 'progress' ), $job->get( 'message' ) );
-			if ( $progress && $line !== $last ) {
-				\WP_CLI::line( $line );
-				$last = $line;
-			}
-
-			if ( $job->isFinished() ) {
-				return $this->controller->snapshot( $job );
-			}
-		}
-	}
-
-	/**
-	 * Run a command body, turning any exception into a clean CLI error.
-	 *
-	 * A stack trace is the wrong answer to "the password is wrong".
-	 *
-	 * @param callable $callback Command body.
-	 * @return mixed
-	 */
-	protected function guard( callable $callback ) {
-		try {
-			return call_user_func( $callback );
-		} catch ( \Throwable $e ) {
-			\WP_CLI::error( $e->getMessage() );
-		}
-	}
-
-	/**
-	 * Budget for one CLI tick.
-	 *
-	 * The command line has no request timeout, so the default slice is long;
-	 * a configured time budget still wins, which keeps CLI and browser runs
-	 * behaving identically when a host needs short slices.
-	 *
-	 * @return Budget
-	 */
-	protected function budget() {
-		$configured = $this->plugin->settings()->getInt( 'time_budget' );
-		return Budget::create( $configured > 0 ? $configured : 60, $this->plugin->settings()->getInt( 'memory_guard', 80 ) );
 	}
 
 	/**

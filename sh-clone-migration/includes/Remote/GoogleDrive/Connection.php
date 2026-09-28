@@ -135,8 +135,9 @@ final class Connection {
 	 * @return string '' when not set.
 	 */
 	public function clientId() {
-		if ( defined( 'SHCM_GDRIVE_CLIENT_ID' ) && '' !== trim( (string) SHCM_GDRIVE_CLIENT_ID ) ) {
-			return trim( (string) SHCM_GDRIVE_CLIENT_ID );
+		$constant = self::constantValue( 'SHCM_GDRIVE_CLIENT_ID' );
+		if ( '' !== $constant ) {
+			return $constant;
 		}
 		$data = $this->data();
 		return isset( $data['client_id'] ) && is_string( $data['client_id'] ) ? $data['client_id'] : '';
@@ -148,8 +149,8 @@ final class Connection {
 	 * @return string '' when not set or when the stored value cannot be opened on this site.
 	 */
 	public function clientSecret() {
-		if ( defined( 'SHCM_GDRIVE_CLIENT_SECRET' ) && '' !== trim( (string) SHCM_GDRIVE_CLIENT_SECRET ) ) {
-			$secret = trim( (string) SHCM_GDRIVE_CLIENT_SECRET );
+		$secret = self::constantValue( 'SHCM_GDRIVE_CLIENT_SECRET' );
+		if ( '' !== $secret ) {
 			$this->noteSecret( $secret );
 			return $secret;
 		}
@@ -159,19 +160,32 @@ final class Connection {
 	}
 
 	/**
-	 * Whether the credentials come from wp-config.php constants (the settings
-	 * form cannot change them then). True when at least one of
-	 * SHCM_GDRIVE_CLIENT_ID and SHCM_GDRIVE_CLIENT_SECRET is set.
+	 * Whether both credentials come from wp-config.php constants, so the
+	 * settings form has nothing left to change.
+	 *
+	 * With only one of SHCM_GDRIVE_CLIENT_ID and SHCM_GDRIVE_CLIENT_SECRET set
+	 * (e.g. only the secret, to keep it out of storage) this is false: the
+	 * other value must still come from the form. constantFields() tells which
+	 * field is locked.
 	 *
 	 * @return bool
 	 */
 	public function credentialsFromConstants() {
-		foreach ( array( 'SHCM_GDRIVE_CLIENT_ID', 'SHCM_GDRIVE_CLIENT_SECRET' ) as $constant ) {
-			if ( defined( $constant ) && '' !== trim( (string) constant( $constant ) ) ) {
-				return true;
-			}
-		}
-		return false;
+		$fields = $this->constantFields();
+		return $fields['client_id'] && $fields['client_secret'];
+	}
+
+	/**
+	 * Which credential fields are set by wp-config.php constants. Such a field
+	 * cannot be changed in the settings form (the constant wins on read).
+	 *
+	 * @return array{client_id: bool, client_secret: bool}
+	 */
+	public function constantFields() {
+		return array(
+			'client_id'     => '' !== self::constantValue( 'SHCM_GDRIVE_CLIENT_ID' ),
+			'client_secret' => '' !== self::constantValue( 'SHCM_GDRIVE_CLIENT_SECRET' ),
+		);
 	}
 
 	/**
@@ -190,6 +204,11 @@ final class Connection {
 	 * folder belong to the old client. An empty secret keeps the stored one
 	 * (the form never shows it again), unless the client ID changed.
 	 *
+	 * The values are stored as passed even when a constant overrides them
+	 * (the constant wins on read). Whether the client ID "changed" is judged
+	 * by the effective ID, so saving the form while SHCM_GDRIVE_CLIENT_ID is
+	 * set (its locked field sends nothing) never ends the connection.
+	 *
 	 * @param string $client_id     Client ID.
 	 * @param string $client_secret Client secret ('' = keep the stored one).
 	 * @return void
@@ -201,6 +220,7 @@ final class Connection {
 	) {
 		$client_id     = trim( (string) $client_id );
 		$client_secret = trim( (string) $client_secret );
+		$id_constant   = self::constantValue( 'SHCM_GDRIVE_CLIENT_ID' );
 		$sealed        = null;
 		if ( '' !== $client_secret ) {
 			$this->noteSecret( $client_secret );
@@ -209,9 +229,11 @@ final class Connection {
 
 		$this->store->update(
 			self::DOCUMENT,
-			function ( array $data ) use ( $client_id, $sealed ) {
-				$previous = isset( $data['client_id'] ) ? (string) $data['client_id'] : '';
-				if ( $previous !== $client_id ) {
+			function ( array $data ) use ( $client_id, $sealed, $id_constant ) {
+				$stored   = isset( $data['client_id'] ) ? (string) $data['client_id'] : '';
+				$previous = '' !== $id_constant ? $id_constant : $stored;
+				$next     = '' !== $id_constant ? $id_constant : $client_id;
+				if ( $previous !== $next ) {
 					$data = self::withoutConnection( $data );
 					unset( $data['client_secret'] );
 				}
@@ -255,10 +277,15 @@ final class Connection {
 	 * reconnect (Google revoked access, or the stored token cannot be opened
 	 * with this site's keys), connected, not_connected.
 	 *
-	 * @return array{state: string, account: string, name: string, folder_id: string, folder_name: string, connected_at: int, error: string, site_id: string, client_id: string, from_constants: bool}
+	 * from_constants is true when both credentials come from constants;
+	 * id_from_constant and secret_from_constant tell which field of the
+	 * settings form to lock.
+	 *
+	 * @return array{state: string, account: string, name: string, folder_id: string, folder_name: string, connected_at: int, error: string, site_id: string, client_id: string, from_constants: bool, id_from_constant: bool, secret_from_constant: bool}
 	 */
 	public function status() {
-		$data  = $this->data();
+		$data   = $this->data();
+		$fields = $this->constantFields();
 		$error = self::text( $data, 'error' );
 		$state = self::STATE_NOT_CONNECTED;
 
@@ -288,16 +315,18 @@ final class Connection {
 		}
 
 		return array(
-			'state'          => $state,
-			'account'        => self::text( $data, 'account_email' ),
-			'name'           => self::text( $data, 'account_name' ),
-			'folder_id'      => self::text( $data, 'folder_id' ),
-			'folder_name'    => self::text( $data, 'folder_name' ),
-			'connected_at'   => isset( $data['connected_at'] ) ? (int) $data['connected_at'] : 0,
-			'error'          => $error,
-			'site_id'        => isset( $data['site_id'] ) && self::isSiteId( $data['site_id'] ) ? $data['site_id'] : '',
-			'client_id'      => $this->clientId(),
-			'from_constants' => $this->credentialsFromConstants(),
+			'state'                => $state,
+			'account'              => self::text( $data, 'account_email' ),
+			'name'                 => self::text( $data, 'account_name' ),
+			'folder_id'            => self::text( $data, 'folder_id' ),
+			'folder_name'          => self::text( $data, 'folder_name' ),
+			'connected_at'         => isset( $data['connected_at'] ) ? (int) $data['connected_at'] : 0,
+			'error'                => $error,
+			'site_id'              => isset( $data['site_id'] ) && self::isSiteId( $data['site_id'] ) ? $data['site_id'] : '',
+			'client_id'            => $this->clientId(),
+			'from_constants'       => $fields['client_id'] && $fields['client_secret'],
+			'id_from_constant'     => $fields['client_id'],
+			'secret_from_constant' => $fields['client_secret'],
 		);
 	}
 
@@ -397,25 +426,40 @@ final class Connection {
 	/**
 	 * Store a refreshed access token.
 	 *
-	 * @param string $access_token  Access token.
-	 * @param int    $expires_in    Lifetime in seconds.
-	 * @param string $refresh_token A new refresh token, when Google rotated it ('' = keep).
-	 * @return void
+	 * A refresh takes a network round trip, during which another request may
+	 * connect again (possibly to another Google account) or disconnect. With
+	 * $used_refresh the write is a compare-and-set: it only happens while the
+	 * stored refresh token is still the one the refresh was made with, so an
+	 * old grant's access token never lands next to a new grant.
+	 *
+	 * @param string      $access_token  Access token.
+	 * @param int         $expires_in    Lifetime in seconds.
+	 * @param string      $refresh_token A new refresh token, when Google rotated it ('' = keep).
+	 * @param string|null $used_refresh  The refresh token the new access token was obtained with (null = write unconditionally).
+	 * @return bool False when the stored grant changed meanwhile and nothing was written.
 	 */
 	public function storeAccessToken(
 		#[\SensitiveParameter]
 		$access_token,
 		$expires_in,
 		#[\SensitiveParameter]
-		$refresh_token = ''
+		$refresh_token = '',
+		#[\SensitiveParameter]
+		$used_refresh = null
 	) {
 		$sealed_access  = $this->sealNew( $access_token, self::CONTEXT_ACCESS_TOKEN );
 		$sealed_refresh = $this->sealNew( $refresh_token, self::CONTEXT_REFRESH_TOKEN );
 		$expires        = $this->now() + max( 0, (int) $expires_in );
+		$written        = false;
+		$box            = $this->box;
 
 		$this->store->update(
 			self::DOCUMENT,
-			function ( array $data ) use ( $sealed_access, $sealed_refresh, $expires ) {
+			function ( array $data ) use ( $sealed_access, $sealed_refresh, $expires, $used_refresh, $box, &$written ) {
+				if ( ! self::holdsRefreshToken( $data, $used_refresh, $box ) ) {
+					return $data;
+				}
+				$written = true;
 				if ( null !== $sealed_access ) {
 					$data['access_token']   = $sealed_access;
 					$data['access_expires'] = $expires;
@@ -428,28 +472,45 @@ final class Connection {
 				return $data;
 			}
 		);
+		return $written;
 	}
 
 	/**
 	 * Mark the connection as needing a new authorization.
 	 *
-	 * @param string $reason User-safe explanation shown until the next connect.
-	 * @return void
+	 * With $used_refresh this is a compare-and-set like storeAccessToken():
+	 * a refresh rejected for an old grant must not mark a connection made in
+	 * the meantime as broken.
+	 *
+	 * @param string      $reason       User-safe explanation shown until the next connect.
+	 * @param string|null $used_refresh The refresh token Google rejected (null = mark unconditionally).
+	 * @return bool False when the stored grant changed meanwhile and nothing was written.
 	 */
-	public function markReconnect( $reason ) {
+	public function markReconnect(
+		$reason,
+		#[\SensitiveParameter]
+		$used_refresh = null
+	) {
 		$reason = trim( (string) $reason );
 		if ( strlen( $reason ) > 500 ) {
 			$reason = substr( $reason, 0, 500 );
 		}
+		$written = false;
+		$box     = $this->box;
 		$this->store->update(
 			self::DOCUMENT,
-			function ( array $data ) use ( $reason ) {
+			function ( array $data ) use ( $reason, $used_refresh, $box, &$written ) {
+				if ( ! self::holdsRefreshToken( $data, $used_refresh, $box ) ) {
+					return $data;
+				}
+				$written        = true;
 				$data['status'] = self::STATE_RECONNECT;
 				$data['error']  = $reason;
 				unset( $data['access_token'], $data['access_expires'] );
 				return $data;
 			}
 		);
+		return $written;
 	}
 
 	/**
@@ -645,6 +706,41 @@ final class Connection {
 		}
 		$this->noteSecret( $plain );
 		return $this->box->seal( $plain, $context );
+	}
+
+	/**
+	 * Whether a document still holds the given refresh token (the compare in
+	 * compare-and-set). Null expects nothing and always matches.
+	 *
+	 * @param array       $data     Document, read under the store's lock.
+	 * @param string|null $expected Expected plaintext refresh token.
+	 * @param SecretBox   $box      Secret box.
+	 * @return bool
+	 */
+	private static function holdsRefreshToken(
+		array $data,
+		#[\SensitiveParameter]
+		$expected,
+		SecretBox $box
+	) {
+		if ( null === $expected ) {
+			return true;
+		}
+		if ( empty( $data['refresh_token'] ) || ! is_string( $data['refresh_token'] ) ) {
+			return false;
+		}
+		$stored = $box->open( $data['refresh_token'], self::CONTEXT_REFRESH_TOKEN );
+		return is_string( $stored ) && '' !== $stored && hash_equals( $stored, (string) $expected );
+	}
+
+	/**
+	 * A trimmed wp-config.php constant.
+	 *
+	 * @param string $name Constant name.
+	 * @return string '' when undefined or empty.
+	 */
+	private static function constantValue( $name ) {
+		return defined( $name ) ? trim( (string) constant( $name ) ) : '';
 	}
 
 	/**
