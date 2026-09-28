@@ -136,7 +136,9 @@ class RemoteUploadStage extends AbstractStage {
 			$result = $this->advance( $job, $state, $budget );
 		} catch ( DriveException $e ) {
 			$result = $this->driveError( $job, $state, $e );
-		} catch ( \RuntimeException $e ) {
+		} catch ( \Exception $e ) {
+			// Local trouble, or an answer from Drive this code did not expect:
+			// never a reason to fail the backup itself, which is on disk.
 			$result = $this->giveUp( $job, $state, $e->getMessage(), 'local' );
 		}
 
@@ -318,15 +320,26 @@ class RemoteUploadStage extends AbstractStage {
 		$this->logger->redactor()->addLiteral( $uri );
 		$drive = $this->backups->drive();
 
+		$offset = (int) $state['offset'];
+		$total  = (int) $state['size'];
+		if ( $offset >= $total ) {
+			// Drive acknowledged every byte without finishing the upload (a
+			// 308 covering the whole file): ask for the final answer instead
+			// of sending an empty chunk.
+			$state['query'] = true;
+		}
+
 		if ( ! empty( $state['query'] ) ) {
-			$reply          = $drive->queryUpload( $uri, (int) $state['size'] );
+			$reply          = $drive->queryUpload( $uri, $total );
 			$state['query'] = false;
-			$this->absorb( $state, $reply );
+			// A status query sends nothing, so "no progress" is expected and
+			// must not use up the stall allowance meant for refused data;
+			// unless there is nothing left to send, where only the stall
+			// limit keeps it from asking forever.
+			$this->absorb( $state, $reply, $offset >= $total );
 			return;
 		}
 
-		$offset = (int) $state['offset'];
-		$total  = (int) $state['size'];
 		clearstatcache( true, $state['path'] );
 		if ( ! is_file( $state['path'] ) || (int) filesize( $state['path'] ) !== $total ) {
 			throw new \RuntimeException( __( 'The archive changed or disappeared during the upload.', 'sh-clone-migration' ) );
@@ -342,12 +355,14 @@ class RemoteUploadStage extends AbstractStage {
 	/**
 	 * Take in what Drive says it has.
 	 *
-	 * @param array $state Stage state (by reference).
-	 * @param array $reply array( done, offset, file ).
+	 * @param array $state       Stage state (by reference).
+	 * @param array $reply       array( done, offset, file ).
+	 * @param bool  $count_stall Whether an answer without progress counts
+	 *                           towards the stall limit.
 	 * @return void
 	 * @throws DriveException When the upload stops making progress.
 	 */
-	protected function absorb( array &$state, array $reply ) {
+	protected function absorb( array &$state, array $reply, $count_stall = true ) {
 		if ( ! empty( $reply['done'] ) ) {
 			$state['file']   = is_array( $reply['file'] ) ? $reply['file'] : array();
 			$state['offset'] = (int) $state['size'];
@@ -360,7 +375,7 @@ class RemoteUploadStage extends AbstractStage {
 		if ( $offset > (int) $state['offset'] ) {
 			$state['retries'] = 0;
 			$state['stalls']  = 0;
-		} else {
+		} elseif ( $count_stall ) {
 			++$state['stalls'];
 			if ( $state['stalls'] > 3 ) {
 				throw new DriveException( __( 'Google Drive keeps refusing the upload data.', 'sh-clone-migration' ), DriveException::SERVER );

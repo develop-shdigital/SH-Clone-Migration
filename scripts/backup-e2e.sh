@@ -49,6 +49,8 @@ ajax() {
 # finish it (loopback requests, WP-Cron). $2 = poll action (status or tick).
 wait_job() {
 	local job=$1 how=${2:-status} limit=${3:-300} start now status msg last=''
+	# No job (the start request failed): nothing to wait for.
+	if [ -z "$job" ] || [ "$job" = "null" ]; then echo "no-job" > "$WORK/last-status"; return 1; fi
 	start=$(date +%s)
 	while true; do
 		status=$(ajax "$how" "job_id=$job" | jq -r '.data.status // "error"')
@@ -61,6 +63,10 @@ wait_job() {
 	done
 }
 history_field() { wpe "\$h = shcm_bootstrap()->backups()->history()->get('$1'); echo \$h ? json_encode(\$h) : '{}';" | jq -r "$2"; }
+
+# Two runs against the same site corrupt each other's results.
+exec 9>/tmp/shcm-backup-e2e.lock
+if ! flock -n 9; then echo "Another backup-e2e run is in progress." >&2; exit 2; fi
 
 echo "=============================================================="
 echo " Scheduled backups + Google Drive end-to-end test"
@@ -86,7 +92,7 @@ wpc config delete SHCM_ENABLE_BACKUPS >/dev/null 2>&1
 wpc config delete SHCM_DISABLE_BACKUPS >/dev/null 2>&1
 wpc option delete shcm_test_backoff shcm_test_chunk shcm_test_no_loopback >/dev/null
 fuser -k "$FAKE_PORT/tcp" >/dev/null 2>&1
-FAKE_GOOGLE_DIR=$WORK/fake PHP_CLI_SERVER_WORKERS=4 nohup php -S "127.0.0.1:$FAKE_PORT" "$PLUGIN/tests/fake-google/router.php" > "$WORK/fake.log" 2>&1 &
+FAKE_GOOGLE_DIR=$WORK/fake PHP_CLI_SERVER_WORKERS=4 nohup php -S "127.0.0.1:$FAKE_PORT" "$PLUGIN/tests/fake-google/router.php" > "$WORK/fake.log" 2>&1 9>&- &
 FAKE_PID=$!
 trap 'kill $FAKE_PID 2>/dev/null; for c in AUTH TOKEN REVOKE API UPLOAD; do (cd "$ROOT" && wp --allow-root config delete SHCM_GDRIVE_${c}_URL >/dev/null 2>&1); done; rm -f "$ROOT/wp-content/mu-plugins/shcm-backup-test.php"' EXIT
 for i in $(seq 1 30); do curl -s "$FAKE/__health" | grep -q ok && break; sleep 0.2; done
