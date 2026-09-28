@@ -8,7 +8,7 @@ Stable tag: 1.0.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Clone an entire WordPress site into a single portable .wpress archive and restore it anywhere. No size limits, no paid extensions, no external services.
+Clone an entire WordPress site into a single portable .wpress archive and restore it anywhere. Scheduled backups, optionally to your own Google Drive.
 
 == Description ==
 
@@ -17,8 +17,9 @@ database plus every file under wp-content - into one portable `.wpress`
 archive, and restores it onto any other WordPress installation.
 
 There is no premium tier. There are no size caps, no file-count limits, no
-license keys, no accounts and no cloud services. The only limits are your
-server's disk space and database.
+license keys and no accounts. The only limits are your server's disk space
+and database. The plugin talks to no outside service unless you connect your
+own Google Drive for backups.
 
 = What it migrates =
 
@@ -58,6 +59,24 @@ sites should do.
 Archive uploads are chunked and resumable, so the PHP upload limit does not
 cap how large an archive may be. A dropped connection resumes from the last
 byte the server confirmed rather than starting a 10 GB upload again.
+
+= Scheduled backups =
+
+Back up daily, weekly, monthly or only on demand, at a time of day in the
+site's timezone. A backup is an ordinary `.wpress` archive, verified and
+fingerprinted like a manual export, so it restores on any site. Choose the
+database, the files or both; keep the newest N on the server; encrypt them
+with a password; get an e-mail when one fails. Backups run in the background,
+so nobody has to keep a browser tab open.
+
+= Copies on your Google Drive =
+
+Optionally, every backup is uploaded to your own Google Drive, through your
+own Google Cloud project, and the upload is verified against the archive's
+checksum. The plugin asks only for Google's `drive.file` permission: it sees
+the files it created and nothing else in your Drive. Uploads are resumable,
+so a 20 GB backup survives time limits and dropped connections. Keep the
+newest M copies on Drive, and optionally none on the server.
 
 = Correct URL replacement =
 
@@ -111,6 +130,10 @@ asserts that `home` and `siteurl` match the destination and warns if
 `wp shcm rollback <job>`
 `wp shcm search-replace https://old.test https://new.test --dry-run`
 `wp shcm doctor`
+`wp shcm backup now`
+`wp shcm backup schedule`
+`wp shcm backup history`
+`wp shcm gdrive status`
 
 == Installation ==
 
@@ -186,6 +209,41 @@ Almost certainly. The size was removed by the web server, not missing from the f
 
 Yes, always, unless you switch it off. After the export, on the Backups screen and on the import screen you see "Database: included — N tables, M rows", counted while the tables were written. An export that cannot read a table completely, finds no tables, or misses a core table stops with the reason instead of producing an incomplete archive.
 
+= How do scheduled backups run if nobody visits the site? =
+
+They use WP-Cron, which WordPress runs when someone visits. On a quiet site,
+or one with DISABLE_WP_CRON, add a real cron job that requests
+`wp-cron.php` (or runs `wp cron event run --due-now`) every few minutes; the
+Scheduled Backups screen and System Status say when WP-Cron looks stuck. A
+backup that was due while nothing ran starts as soon as WP-Cron runs again.
+`wp shcm backup run` from a system cron job works too.
+
+= Why do I need my own Google Cloud project for Google Drive? =
+
+So that your backups go straight from your server to your Drive, with no
+third party in between and no shared app that could be suspended. It is free
+and takes about five minutes once; the Scheduled Backups screen walks you
+through it and shows the exact redirect URI to paste.
+
+= Can the plugin see my other Google Drive files? =
+
+No. It asks only for the `drive.file` permission, which limits it to the
+files it created itself. It cannot list, read, change or delete anything
+else.
+
+= What happens to backups on Google Drive when I disconnect or uninstall? =
+
+They stay on your Drive. Disconnecting (and uninstalling) revokes the
+plugin's access; the files themselves are yours.
+
+= What if a backup is restored onto another site, or the site is cloned? =
+
+The schedule and the Google Drive connection are kept outside the database,
+so a restore neither carries them to another site nor replaces them. If
+wp-content is copied to another server by other means, the copy notices it is
+not the original, pauses its schedule and asks before it uses the Drive
+connection, so two sites never prune each other's backups.
+
 == Screenshots ==
 
 1. Export: one button, with the advanced controls tucked away
@@ -195,7 +253,42 @@ Yes, always, unless you switch it off. After the export, on the Backups screen a
 5. Backups: verify, download or delete stored archives
 6. System Status: what this server can do and how the engine adapts
 
+== External services ==
+
+This plugin connects to Google's services only if you connect a Google Drive
+account on the Scheduled Backups screen. Nothing is sent before that, and
+manual exports and imports never contact any outside service.
+
+Once connected, the plugin sends to Google, over HTTPS:
+
+* your OAuth client ID and secret and the authorisation code, to sign in and
+  to renew access (oauth2.googleapis.com, accounts.google.com);
+* the backup archives, with their file name, size and checksum, and a few
+  labels identifying the site and the kind of backup, when a backup is
+  uploaded, plus requests to list and delete this plugin's own backup files
+  for retention (www.googleapis.com);
+* a request to revoke the plugin's access, when you disconnect or uninstall
+  (oauth2.googleapis.com).
+
+This is Google Drive, provided by Google LLC:
+[Terms of Service](https://policies.google.com/terms),
+[Privacy Policy](https://policies.google.com/privacy),
+[Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy).
+
 == Changelog ==
+
+= 1.1.0 =
+* New: Scheduled Backups. Back up daily, weekly (pick the day), monthly (pick the day or "last day") or only on demand, at a time of day in the site's timezone, including across daylight-saving changes. Choose database and files, database only or files only, WordPress core files and extra exclusions.
+* New: backups run in the background: "Back up now" and scheduled backups keep going after the page is closed, driven by a loopback request with WP-Cron as the fallback. A backup never runs while an import or maintenance is in progress; it waits and retries.
+* New: keep the newest N backups on the server. Manual exports are never deleted by retention, and a backup whose upload failed is always kept.
+* New: optional password encryption for backups, with the password stored encrypted with the keys in wp-config.php so backups can run unattended.
+* New: Google Drive storage through your own Google Cloud project, with only the drive.file permission (the plugin sees nothing but the files it created). Resumable uploads in 8 MB chunks survive time limits, dropped connections and rate limits; every upload is verified against the archive's checksum; keep the newest M copies on Drive, and optionally none on the server.
+* New: backup history with the result, size, checksum and Drive copy of every run; retry a failed upload from the history, or send any archive to Google Drive with `wp shcm backup upload`.
+* New: e-mail when a backup fails or is not uploaded, after every backup, or never.
+* New: WP-CLI commands `wp shcm backup now|run|schedule|history|upload|finish` and `wp shcm gdrive status|test|list|disconnect`.
+* New: System Status shows the backup schedule, whether WP-Cron is running and the Google Drive connection.
+* The schedule, the Drive connection and the history live outside the database, so migrating or restoring a site neither carries them to another site nor replaces them; a copy of wp-content on another server pauses itself instead of pruning the original's backups.
+* Jobs are now locked while a request works on them, so a browser tab, WP-Cron and the background runner can never advance the same job at once, and cancelling a running job always takes effect.
 
 = 1.0.1 =
 * Downloads keep their exact size (Content-Length) on Apache with PHP-FPM and on servers that compress every response, so download managers no longer report "file size unknown" and can resume. Correct suffix, open and clamped ranges, 416 responses, ETag/If-Range (Chrome and Edge can resume), HEAD, and no download of an archive that is still being written.
@@ -225,6 +318,9 @@ Yes, always, unless you switch it off. After the export, on the Backups screen a
 * WP-CLI commands and a REST API.
 
 == Upgrade Notice ==
+
+= 1.1.0 =
+Adds scheduled backups (daily, weekly, monthly or on demand) with optional copies on your own Google Drive.
 
 = 1.0.1 =
 Fixes downloads reported as "size unknown", adds SHA-256 checksums and shows exactly what each archive contains. Several fixes that stop tables or files from being silently left out. Recommended for everyone.
