@@ -16,7 +16,7 @@ Google server and reviewed adversarially; that is summarised first.
 | Suite | Result |
 |---|---|
 | PHPUnit (unit and integration), PHP 8.4 | **413 tests, 175,000 assertions, 0 failures** (1 skipped: a permission test that cannot fail as root; run as www-data it passes) |
-| Backup end-to-end, `scripts/backup-e2e.sh` (Apache + PHP-FPM, real WP-Cron and loopbacks, fake Google server) | **84 / 84** |
+| Backup end-to-end, `scripts/backup-e2e.sh` (Apache + PHP-FPM, real WP-Cron and loopbacks, fake Google server) | **87 / 87** |
 | Fake Google server self-test, `tests/fake-google/selftest.sh` | **110 / 110** |
 | Migration end-to-end, `scripts/e2e.sh` | **81 / 81** |
 | Edge-case migration, `scripts/e2e-edge.sh` | **27 / 27** |

@@ -300,9 +300,11 @@ is "scheduled run with Drive: success" "$(history_field "$JOB9" .status)" "succe
 ARCH9=$(history_field "$JOB9" .archive)
 row=$(curl -s -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm-backups" | tr -d '\n' | grep -o "<tr data-archive=\"$ARCH9\">.*" | sed 's#</tr>.*##')
 echo "$row" | grep -q 'on Google Drive'; check "Backups screen marks the backup as on Google Drive" $?
-echo "$row" | grep -q 'data-action="gdrive"'; check "Backups screen offers \"Send to Google Drive\"" $?
+! echo "$row" | grep -q 'data-action="gdrive"'; check "no \"Send to Google Drive\" for a backup already there" $?
 MAN=$(cd "$ROOT" && wp --allow-root shcm export --porcelain 2>/dev/null | grep wpress | tail -1)
 MANB=$(basename "$MAN")
+mrow=$(curl -s -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm-backups" | tr -d '\n' | grep -o "<tr data-archive=\"$MANB\">.*" | sed 's#</tr>.*##')
+echo "$mrow" | grep -q 'data-action="gdrive"'; check "Backups screen offers \"Send to Google Drive\" for a manual export" $?
 r=$(ajax backup_upload "archive=$MANB")
 UJ=$(echo "$r" | jq -r '.data.id')
 wait_job "$UJ" status 300 >/dev/null
