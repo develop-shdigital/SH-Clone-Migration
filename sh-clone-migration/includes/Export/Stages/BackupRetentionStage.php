@@ -141,6 +141,7 @@ class BackupRetentionStage extends AbstractStage {
 		try {
 			$files = $this->backups->drive()->listBackups( $folder, $connection->siteId(), 'backup' );
 		} catch ( DriveException $e ) {
+			/* translators: %s: error message */
 			$job->addWarning( sprintf( __( 'Old backups on Google Drive were not cleaned up: %s', 'sh-clone-migration' ), $e->getMessage() ) );
 			return 0;
 		}
@@ -202,6 +203,7 @@ class BackupRetentionStage extends AbstractStage {
 					}
 				}
 			} catch ( DriveException $e ) {
+				/* translators: 1: file name, 2: error message */
 				$job->addWarning( sprintf( __( 'An old backup on Google Drive could not be deleted (%1$s): %2$s', 'sh-clone-migration' ), $file['name'], $e->getMessage() ) );
 			}
 		}

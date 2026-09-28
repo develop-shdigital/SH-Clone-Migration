@@ -523,6 +523,7 @@ class RemoteUploadStage extends AbstractStage {
 				}
 			}
 			$this->logger->warning( sprintf( 'Google Drive: %s Starting the upload again.', $e->getMessage() ) );
+			/* translators: %s: reason */
 			$job->addWarning( sprintf( __( 'The upload to Google Drive was started again: %s', 'sh-clone-migration' ), $e->getMessage() ) );
 			unset( $state['session'], $state['file'], $state['md5'] );
 			$state['offset'] = 0;
@@ -547,6 +548,7 @@ class RemoteUploadStage extends AbstractStage {
 		$job->setShared( 'resume_at', 0 );
 		$this->logger->error( 'Upload to Google Drive failed: ' . $message );
 		if ( $job->param( 'upload_only' ) ) {
+			/* translators: %s: reason */
 			throw new \RuntimeException( sprintf( __( 'Upload to Google Drive failed: %s', 'sh-clone-migration' ), $message ) );
 		}
 		$job->setShared(
@@ -557,6 +559,7 @@ class RemoteUploadStage extends AbstractStage {
 				'kind'   => (string) $kind,
 			)
 		);
+		/* translators: %s: reason */
 		$job->addWarning( sprintf( __( 'The backup was kept on this server but not uploaded to Google Drive: %s', 'sh-clone-migration' ), $message ) );
 		unset( $state['session'] );
 		$state['phase'] = 'done';

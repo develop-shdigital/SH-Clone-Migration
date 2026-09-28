@@ -210,12 +210,54 @@ class Menu {
 			'passwordMismatch' => __( 'The two passwords do not match.', 'sh-clone-migration' ),
 			'confirmSendDrive' => __( 'Upload a copy of this archive to Google Drive? The upload runs in the background; you can follow it on the Scheduled Backups screen.', 'sh-clone-migration' ),
 			'schedulesUrl'    => admin_url( 'admin.php?page=shcm-schedules' ),
+			'ui'              => array(
+				'tables'           => __( 'Tables', 'sh-clone-migration' ),
+				'notIncluded'      => __( 'not included', 'sh-clone-migration' ),
+				'rows'             => __( 'Rows', 'sh-clone-migration' ),
+				'files'            => __( 'Files', 'sh-clone-migration' ),
+				'sourceSize'       => __( 'Source size', 'sh-clone-migration' ),
+				'skipped'          => __( 'Skipped', 'sh-clone-migration' ),
+				'archive'          => __( 'Archive', 'sh-clone-migration' ),
+				/* translators: 1: size, 2: number of bytes */
+				'sizeWithBytes'    => __( '%1$s (%2$s bytes)', 'sh-clone-migration' ),
+				'valuesUpdated'    => __( 'Values updated', 'sh-clone-migration' ),
+				/* translators: 1: warnings shown, 2: total warnings */
+				'warningsShown'    => __( 'Showing the last %1$s of %2$s warnings. The migration log lists every one of them.', 'sh-clone-migration' ),
+				/* translators: number of warnings */
+				'warningsTitle'    => __( 'Warnings (%s)', 'sh-clone-migration' ),
+				'archiveSize'      => __( 'Archive size', 'sh-clone-migration' ),
+				/* translators: number of bytes */
+				'exactlyBytes'     => __( 'exactly %s bytes', 'sh-clone-migration' ),
+				'database'         => __( 'Database', 'sh-clone-migration' ),
+				'dbNotIncluded'    => __( 'NOT included in this archive', 'sh-clone-migration' ),
+				'dbNoTables'       => __( 'No tables were exported', 'sh-clone-migration' ),
+				'dbIncluded'       => __( 'Included', 'sh-clone-migration' ),
+				/* translators: 1: tables, 2: rows */
+				'dbCounts'         => __( '%1$s tables, %2$s rows', 'sh-clone-migration' ),
+				/* translators: size */
+				'dbSql'            => __( '%s of SQL', 'sh-clone-migration' ),
+				'tablePrefix'      => __( 'table prefix', 'sh-clone-migration' ),
+				/* translators: number of files */
+				'skippedSeeLog'    => __( '%s skipped (see the warnings and the log)', 'sh-clone-migration' ),
+				'verification'     => __( 'Verification', 'sh-clone-migration' ),
+				/* translators: number of entries */
+				'verifiedFull'     => __( 'The archive was read back and every one of its %s entries matched its checksum.', 'sh-clone-migration' ),
+				'verifiedQuick'    => __( 'Structure check only (quick mode in the settings); entry checksums were not read back.', 'sh-clone-migration' ),
+				'howToCheck'       => __( 'How to check the downloaded file', 'sh-clone-migration' ),
+				/* translators: number of bytes */
+				'checkSize'        => __( 'The downloaded file must be exactly %s bytes. To check it:', 'sh-clone-migration' ),
+				/* translators: number of bytes */
+				'checkSizeAndHash' => __( 'The downloaded file must be exactly %s bytes and its SHA-256 must be the one shown above. To compute it:', 'sh-clone-migration' ),
+				'importChecks'     => __( 'The import checks every entry again before it changes anything, so a damaged copy is always refused.', 'sh-clone-migration' ),
+				'sizeHidden'       => __( 'This server may hide the file size from browsers and download managers (they then say the size is unknown and cannot resume). The download is still complete when its size and SHA-256 match. See System Status for the one-time server rule that fixes this.', 'sh-clone-migration' ),
+			),
 			'sched'           => array(
 				'paused'             => __( 'Paused', 'sh-clone-migration' ),
 				/* translators: %s: time until the next backup, e.g. "12 hours" */
 				'nextIn'             => __( 'in %s', 'sh-clone-migration' ),
 				'anyMoment'          => __( 'Any moment now', 'sh-clone-migration' ),
 				'confirmCancel'      => __( 'Cancel this backup?', 'sh-clone-migration' ),
+				'uploadFailed'       => __( 'Upload to Google Drive failed (the archive is still on this server)', 'sh-clone-migration' ),
 				'weakKeys'           => __( 'The security keys in wp-config.php are missing or still the sample values, so the Google Drive tokens and the backup password are sealed with keys kept in the database, which is inside every backup. Add real keys to wp-config.php (or define SHCM_SECRET_KEY), then reconnect and enter the password again.', 'sh-clone-migration' ),
 				/* translators: 1: schedule, e.g. "Daily at 03:15", 2: date and time of the next backup */
 				'nextLabel'          => __( '%1$s · next %2$s', 'sh-clone-migration' ),

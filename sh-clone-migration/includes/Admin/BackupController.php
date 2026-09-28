@@ -79,8 +79,38 @@ class BackupController {
 			'next_in'   => $summary['next_run'] ? human_time_diff( time(), (int) $summary['next_run'] ) : '',
 			'next_when' => $summary['next_run'] ? wp_date( get_option( 'date_format' ) . ' H:i', (int) $summary['next_run'] ) : '',
 			'history'   => $this->history(),
+			'totals'    => $this->totals(),
 			'drive'     => $this->driveStatus(),
 		);
+	}
+
+	/**
+	 * Backups kept on this server and on Drive, over the whole history (the
+	 * table only shows the newest rows).
+	 *
+	 * @return array array( local, local_bytes, remote )
+	 */
+	protected function totals() {
+		$catalog = new \SHCM\Archive\Catalog( $this->plugin->storage() );
+		$totals  = array(
+			'local'       => 0,
+			'local_bytes' => 0,
+			'remote'      => 0,
+		);
+		foreach ( $this->backups()->history()->all( \SHCM\Backup\History::MAX ) as $entry ) {
+			if ( ! isset( $entry['kind'] ) || 'backup' !== $entry['kind'] ) {
+				continue;
+			}
+			$path = ! empty( $entry['archive'] ) ? $catalog->resolve( (string) $entry['archive'] ) : null;
+			if ( null !== $path ) {
+				++$totals['local'];
+				$totals['local_bytes'] += (int) @filesize( $path );
+			}
+			if ( isset( $entry['remote']['status'] ) && 'uploaded' === $entry['remote']['status'] ) {
+				++$totals['remote'];
+			}
+		}
+		return $totals;
 	}
 
 	/**
@@ -444,6 +474,7 @@ class BackupController {
 		$when = wp_date( get_option( 'date_format' ) . ' H:i', (int) $timestamp );
 		$in   = (int) $timestamp - time();
 		if ( $in <= 60 ) {
+			/* translators: %s: date and time */
 			return sprintf( __( '%s (any moment now)', 'sh-clone-migration' ), $when );
 		}
 		/* translators: 1: date, 2: human time difference */

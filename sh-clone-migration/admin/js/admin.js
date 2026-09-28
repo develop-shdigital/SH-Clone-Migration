@@ -10,6 +10,17 @@
 
 	var data = window.shcmData || {};
 	var strings = data.strings || {};
+	var U = strings.ui || {};
+
+	// Replace %s, %1$s and %2$s in a translated string.
+	function fmt( text ) {
+		var args = Array.prototype.slice.call( arguments, 1 );
+		var next = 0;
+		return String( text || '' ).replace( /%(?:(\d)\$)?s/g, function ( match, position ) {
+			var value = position ? args[ position - 1 ] : args[ next++ ];
+			return value === undefined ? '' : String( value );
+		} );
+	}
 
 	/* ---------------------------------------------------------------- utils */
 
@@ -233,25 +244,25 @@
 		if ( job.type === 'export' && report.database_included !== null && report.database_included !== undefined ) {
 			// Always shown for an export, zero included: a missing database
 			// must be visible, not silently absent from the list.
-			facts.push( [ 'Tables', report.database_included === false ? 'not included' : formatNumber( report.tables ), ! report.database_included || ! report.tables ] );
+			facts.push( [ U.tables, report.database_included === false ? U.notIncluded : formatNumber( report.tables ), ! report.database_included || ! report.tables ] );
 		} else if ( report.tables ) {
-			facts.push( [ 'Tables', formatNumber( report.tables ) ] );
+			facts.push( [ U.tables, formatNumber( report.tables ) ] );
 		}
 		if ( report.database && report.database.rows ) {
-			facts.push( [ 'Rows', formatNumber( report.database.rows ) ] );
+			facts.push( [ U.rows, formatNumber( report.database.rows ) ] );
 		}
 		if ( report.file_totals && report.file_totals.files ) {
-			facts.push( [ 'Files', formatNumber( report.file_totals.files ) ] );
-			facts.push( [ 'Source size', formatBytes( report.file_totals.bytes ) ] );
+			facts.push( [ U.files, formatNumber( report.file_totals.files ) ] );
+			facts.push( [ U.sourceSize, formatBytes( report.file_totals.bytes ) ] );
 		}
 		if ( report.file_totals && report.file_totals.skipped ) {
-			facts.push( [ 'Skipped', formatNumber( report.file_totals.skipped ), true ] );
+			facts.push( [ U.skipped, formatNumber( report.file_totals.skipped ), true ] );
 		}
 		if ( report.archive_size ) {
-			facts.push( [ 'Archive', formatBytes( report.archive_size ) + ' (' + formatNumber( report.archive_size ) + ' bytes)' ] );
+			facts.push( [ U.archive, fmt( U.sizeWithBytes, formatBytes( report.archive_size ), formatNumber( report.archive_size ) ) ] );
 		}
 		if ( report.urls && report.urls.stats ) {
-			facts.push( [ 'Values updated', formatNumber( report.urls.stats.values_changed ) ] );
+			facts.push( [ U.valuesUpdated, formatNumber( report.urls.stats.values_changed ) ] );
 		}
 
 		this.facts.innerHTML = facts.map( function ( fact ) {
@@ -506,10 +517,9 @@
 		}
 		var total = Number( job.warnings_total ) || job.warnings.length;
 		var note = total > job.warnings.length
-			? '<p class="description">Showing the last ' + formatNumber( job.warnings.length ) + ' of ' + formatNumber( total ) +
-				' warnings. The migration log lists every one of them.</p>'
+			? '<p class="description">' + escapeHtml( fmt( U.warningsShown, formatNumber( job.warnings.length ), formatNumber( total ) ) ) + '</p>'
 			: '';
-		return '<h3>Warnings (' + formatNumber( total ) + ')</h3>' + note + '<ul class="ul-disc">' + job.warnings.map( function ( warning ) {
+		return '<h3>' + escapeHtml( fmt( U.warningsTitle, formatNumber( total ) ) ) + '</h3>' + note + '<ul class="ul-disc">' + job.warnings.map( function ( warning ) {
 			return '<li>' + escapeHtml( warning.message ) + '</li>';
 		} ).join( '' ) + '</ul>';
 	}
@@ -524,7 +534,7 @@
 		var rows = [];
 		var name = report.archive || '';
 
-		rows.push( [ 'Archive size', formatBytes( report.archive_size ) + ' &mdash; exactly <strong>' + formatNumber( report.archive_size ) + ' bytes</strong>' ] );
+		rows.push( [ escapeHtml( U.archiveSize ), formatBytes( report.archive_size ) + ' &mdash; <strong>' + escapeHtml( fmt( U.exactlyBytes, formatNumber( report.archive_size ) ) ) + '</strong>' ] );
 
 		if ( report.sha256 ) {
 			rows.push( [ 'SHA-256', '<code class="shcm-hash">' + escapeHtml( report.sha256 ) + '</code>' ] );
@@ -532,12 +542,12 @@
 
 		var db = report.database || {};
 		if ( report.database_included === false || ! db.included ) {
-			rows.push( [ 'Database', '<span class="shcm-text-danger">NOT included in this archive</span>' ] );
+			rows.push( [ escapeHtml( U.database ), '<span class="shcm-text-danger">' + escapeHtml( U.dbNotIncluded ) + '</span>' ] );
 		} else if ( ! db.tables ) {
-			rows.push( [ 'Database', '<span class="shcm-text-danger">No tables were exported</span>' ] );
+			rows.push( [ escapeHtml( U.database ), '<span class="shcm-text-danger">' + escapeHtml( U.dbNoTables ) + '</span>' ] );
 		} else {
-			rows.push( [ 'Database', 'Included &mdash; <strong>' + formatNumber( db.tables ) + ' tables, ' + formatNumber( db.rows ) + ' rows</strong>, ' +
-				formatBytes( db.sql_bytes ) + ' of SQL (table prefix <code>' + escapeHtml( db.prefix || '' ) + '</code>)' ] );
+			rows.push( [ escapeHtml( U.database ), escapeHtml( U.dbIncluded ) + ' &mdash; <strong>' + escapeHtml( fmt( U.dbCounts, formatNumber( db.tables ), formatNumber( db.rows ) ) ) + '</strong>, ' +
+				escapeHtml( fmt( U.dbSql, formatBytes( db.sql_bytes ) ) ) + ' (' + escapeHtml( U.tablePrefix ) + ' <code>' + escapeHtml( db.prefix || '' ) + '</code>)' ] );
 		}
 
 		var groups = report.entry_groups || {};
@@ -559,32 +569,29 @@
 		// while copying (vanished, unreadable or still changing).
 		var skipped = ( report.files_exported && report.files_exported.skipped ? Number( report.files_exported.skipped ) : 0 ) +
 			( report.file_totals && report.file_totals.skipped ? Number( report.file_totals.skipped ) : 0 );
-		rows.push( [ 'Files', '<strong>' + formatNumber( files ) + '</strong>' + ( parts.length ? ': ' + parts.join( ', ' ) : '' ) +
-			( skipped ? ' &mdash; <span class="shcm-text-danger">' + formatNumber( skipped ) + ' skipped (see the warnings and the log)</span>' : '' ) ] );
+		rows.push( [ escapeHtml( U.files ), '<strong>' + formatNumber( files ) + '</strong>' + ( parts.length ? ': ' + parts.join( ', ' ) : '' ) +
+			( skipped ? ' &mdash; <span class="shcm-text-danger">' + escapeHtml( fmt( U.skippedSeeLog, formatNumber( skipped ) ) ) + '</span>' : '' ) ] );
 
 		if ( report.verify_mode === 'full' ) {
-			rows.push( [ 'Verification', 'The archive was read back and every one of its ' + formatNumber( report.verified_entries ) + ' entries matched its checksum.' ] );
+			rows.push( [ escapeHtml( U.verification ), escapeHtml( fmt( U.verifiedFull, formatNumber( report.verified_entries ) ) ) ] );
 		} else if ( report.verify_mode === 'quick' ) {
-			rows.push( [ 'Verification', 'Structure check only (quick mode in the settings); entry checksums were not read back.' ] );
+			rows.push( [ escapeHtml( U.verification ), escapeHtml( U.verifiedQuick ) ] );
 		}
 
 		var html = '<table class="widefat shcm-summary"><tbody>' + rows.map( function ( row ) {
 			return '<tr><th scope="row">' + row[ 0 ] + '</th><td>' + row[ 1 ] + '</td></tr>';
 		} ).join( '' ) + '</tbody></table>';
 
-		html += '<details class="shcm-verify-help"><summary>How to check the downloaded file</summary>' +
-			'<p>The downloaded file must be exactly <strong>' + formatNumber( report.archive_size ) + ' bytes</strong>' +
-			( report.sha256 ? ' and its SHA-256 must be the one shown above' : '' ) + '. To compute it:</p>' +
+		html += '<details class="shcm-verify-help"><summary>' + escapeHtml( U.howToCheck ) + '</summary>' +
+			'<p>' + escapeHtml( fmt( report.sha256 ? U.checkSizeAndHash : U.checkSize, formatNumber( report.archive_size ) ) ) + '</p>' +
 			'<p>Windows (PowerShell): <code>Get-FileHash .\\' + escapeHtml( name ) + ' -Algorithm SHA256</code><br>' +
 			'macOS: <code>shasum -a 256 ' + escapeHtml( name ) + '</code><br>' +
 			'Linux: <code>sha256sum ' + escapeHtml( name ) + '</code></p>' +
-			'<p>The import checks every entry again before it changes anything, so a damaged copy is always refused.</p>' +
+			'<p>' + escapeHtml( U.importChecks ) + '</p>' +
 			'</details>';
 
 		if ( report.size_visible === false ) {
-			html += '<div class="shcm-alert shcm-alert--warning">This server may hide the file size from browsers and download managers ' +
-				'(they then say the size is unknown and cannot resume). The download is still complete when its size and SHA-256 match. ' +
-				'See <em>System status</em> for the one-time server rule that fixes this.</div>';
+			html += '<div class="shcm-alert shcm-alert--warning">' + escapeHtml( U.sizeHidden ) + '</div>';
 		}
 
 		return html;
@@ -1331,16 +1338,6 @@
 			return '<span class="shcm-tag' + ( tone ? ' shcm-tag--' + tone : '' ) + '">' + escapeHtml( text ) + '</span>';
 		}
 
-		// Replace %s, %1$s and %2$s in a translated string.
-		function fmt( text ) {
-			var args = Array.prototype.slice.call( arguments, 1 );
-			var next = 0;
-			return String( text || '' ).replace( /%(?:(\d)\$)?s/g, function ( match, position ) {
-				var value = position ? args[ position - 1 ] : args[ next++ ];
-				return value === undefined ? '' : String( value );
-			} );
-		}
-
 		function alertBox( level, html, action ) {
 			return '<div class="shcm-alert shcm-alert--' + level + '">' + html +
 				( action ? ' ' + action : '' ) + '</div>';
@@ -1359,10 +1356,9 @@
 		}
 
 		function renderStats( schedule, drive ) {
-			var history = status.history || [];
-			var local = history.filter( function ( row ) { return row.present && row.status !== 'failed'; } );
-			var localBytes = local.reduce( function ( sum, row ) { return sum + ( row.size || 0 ); }, 0 );
-			var remote = history.filter( function ( row ) { return row.remote && row.remote.status === 'uploaded'; } );
+			// Counted by the server over the whole history, not just the rows
+			// the table shows.
+			var totals = status.totals || { local: 0, local_bytes: 0, remote: 0 };
 			var last = schedule.last;
 			var next;
 			var nextLabel = schedule.describe || '';
@@ -1383,8 +1379,8 @@
 			var tiles = [
 				[ next, nextLabel ],
 				[ lastText, last ? L.lastBackup : L.noBackupYet, last && ( last.status === 'failed' || last.status === 'partial' ) ],
-				[ formatNumber( local.length ) + ' · ' + formatBytes( localBytes ), L.keptHere ],
-				[ drive.state === 'connected' ? fmt( L.onDrive, formatNumber( remote.length ) ) : ( drive.state === 'reconnect' ? L.reconnectShort : L.notConnected ), L.googleDrive, drive.state === 'reconnect' ]
+				[ formatNumber( totals.local ) + ' · ' + formatBytes( totals.local_bytes ), L.keptHere ],
+				[ drive.state === 'connected' ? fmt( L.onDrive, formatNumber( totals.remote ) ) : ( drive.state === 'reconnect' ? L.reconnectShort : L.notConnected ), L.googleDrive, drive.state === 'reconnect' ]
 			];
 			$( '#shcm-schedule-stats' ).innerHTML = tiles.map( function ( tile ) {
 				return '<div class="shcm-stat' + ( tile[ 2 ] ? ' shcm-stat--warn' : '' ) + '">' +
@@ -1527,6 +1523,24 @@
 				} ).join( '' ) + '</tbody></table></div>';
 		}
 
+		// The server changes some settings by itself (Disconnect switches Drive
+		// off and keeps at least one backup here): show what is stored.
+		function loadServerSettings() {
+			var config = ( status.schedule || {} ).config || {};
+			var toggle = $( '#shcm-gdrive-toggle' );
+			var keep = $( '#shcm-keep-local' );
+			if ( toggle && typeof config.gdrive !== 'undefined' ) {
+				toggle.checked = !! config.gdrive;
+			}
+			if ( keep && typeof config.keep_local !== 'undefined' ) {
+				keep.value = config.keep_local;
+			}
+			var nowDrive = $( '#shcm-backup-now-drive' );
+			if ( nowDrive ) {
+				nowDrive.checked = !! config.gdrive && ( status.drive || {} ).state === 'connected';
+			}
+		}
+
 		function syncForm() {
 			var frequency = $( '#shcm-frequency' ).value;
 			$$( '.shcm-when', form ).forEach( function ( node ) {
@@ -1553,7 +1567,18 @@
 		function renderBackupResult( job ) {
 			var report = job.report || {};
 			var remote = report.remote_upload || null;
+			var uploadOnly = !! ( job.params && job.params.upload_only );
 			var html = '';
+			if ( job.status === 'completed' && uploadOnly ) {
+				html += '<div class="shcm-alert shcm-alert--success"><strong>' + escapeHtml( strings.uploadDone ) + '.</strong>' +
+					( remote && remote.link ? ' <a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml( L.openInDrive ) + '</a>' : '' ) + '</div>';
+				return html + renderWarnings( job );
+			}
+			if ( job.status !== 'completed' && job.status !== 'cancelled' && uploadOnly ) {
+				html += '<div class="shcm-alert shcm-alert--error"><strong>' + escapeHtml( L.uploadFailed ) + ':</strong> ' +
+					escapeHtml( job.error && job.error.message ? job.error.message : '' ) + '</div>';
+				return html + renderWarnings( job );
+			}
 			if ( job.status === 'completed' ) {
 				if ( report.backup && report.backup.gdrive && ( ! remote || remote.status !== 'uploaded' ) ) {
 					html += '<div class="shcm-alert shcm-alert--warning"><strong>' + escapeHtml( strings.backupPartial || '' ) + '.</strong> ' +
@@ -1611,6 +1636,7 @@
 					password.value = '';
 					confirm.value = '';
 				}
+				loadServerSettings();
 				render();
 				feedback( node, strings.saved + ( status.next_text ? ' ' + fmt( L.nextBackup, status.next_text ) : '' ) );
 			} ).catch( function ( error ) {
@@ -1673,6 +1699,7 @@
 					button.disabled = true;
 					api( 'backup_adopt', {} ).then( function ( next ) {
 						status = next;
+						loadServerSettings();
 						render();
 					} ).catch( function ( error ) {
 						button.disabled = false;
@@ -1699,6 +1726,7 @@
 					}
 					api( 'gdrive_disconnect', {} ).then( function ( next ) {
 						status = next;
+						loadServerSettings();
 						render();
 						if ( next.notice ) {
 							feedback( $( '#shcm-gdrive-message' ), next.notice, true );

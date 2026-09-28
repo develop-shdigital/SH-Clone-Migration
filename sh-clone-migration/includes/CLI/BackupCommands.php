@@ -105,17 +105,15 @@ class BackupCommands {
 	}
 
 	/**
-	 * Run the scheduled backup if it is due, and finish any backup that is
-	 * still running. Meant for a system cron job.
+	 * Run the scheduled backup if it is due.
 	 *
-	 * ## OPTIONS
-	 *
-	 * [--quiet]
-	 * : Print nothing when there is nothing to do.
+	 * Meant for a system cron job, every few minutes. A stalled backup is
+	 * continued; one the site is already running is left to it. With
+	 * WP-CLI's global --quiet only postponements and problems are printed.
 	 *
 	 * ## EXAMPLES
 	 *
-	 *     wp shcm backup run
+	 *     wp shcm backup run --quiet
 	 *
 	 * @param array $args       Positional arguments.
 	 * @param array $assoc_args Options.
@@ -137,13 +135,20 @@ class BackupCommands {
 	 * @return void
 	 */
 	protected function run_run( $args, $assoc_args ) {
-		unset( $args );
+		unset( $args, $assoc_args );
 		$backups = $this->plugin->backups();
 		$backups->reconcile();
 
 		$running = $backups->runningJob();
 		if ( null !== $running ) {
-			\WP_CLI::line( sprintf( 'Continuing backup %s.', $running ) );
+			$job = $this->plugin->jobs()->load( $running );
+			if ( null !== $job && ! \SHCM\Jobs\Scheduler::workerMayTick( $job, $this->plugin->runner()->jobsDirectory(), time() ) ) {
+				// Another driver (the site's loopback chain, an earlier run of
+				// this command) is on it: do not pile up behind it.
+				\WP_CLI::log( sprintf( 'Backup %s is running.', $running ) );
+				return;
+			}
+			\WP_CLI::log( sprintf( 'Continuing backup %s.', $running ) );
 			$this->finish( $running, false );
 			return;
 		}
@@ -162,13 +167,11 @@ class BackupCommands {
 					\WP_CLI::error( 'Scheduled backup ' . $outcome['result'] . ': ' . $outcome['message'] );
 					return;
 			}
-			if ( ! isset( $assoc_args['quiet'] ) ) {
-				$summary = $backups->summary();
-				\WP_CLI::line( 'Nothing is due. ' . $summary['describe'] . ( $summary['next_run'] ? ', next run ' . wp_date( 'Y-m-d H:i', (int) $summary['next_run'] ) : '' ) . '.' );
-			}
+			$summary = $backups->summary();
+			\WP_CLI::log( 'Nothing is due. ' . $summary['describe'] . ( $summary['next_run'] ? ', next run ' . wp_date( 'Y-m-d H:i', (int) $summary['next_run'] ) : '' ) . '.' );
 			return;
 		}
-		\WP_CLI::line( sprintf( 'Scheduled backup %s started.', $job->id() ) );
+		\WP_CLI::log( sprintf( 'Scheduled backup %s started.', $job->id() ) );
 		$this->finish( $job->id(), false );
 	}
 
@@ -239,7 +242,7 @@ class BackupCommands {
 					$remote = isset( $entry['remote'] ) && is_array( $entry['remote'] ) ? $entry['remote'] : array();
 					$rows[] = array(
 						'id'      => $entry['id'],
-						'started' => gmdate( 'Y-m-d H:i', (int) ( isset( $entry['started'] ) ? $entry['started'] : $entry['created'] ) ),
+						'started' => wp_date( 'Y-m-d H:i', (int) ( isset( $entry['started'] ) ? $entry['started'] : $entry['created'] ) ),
 						'trigger' => isset( $entry['trigger'] ) ? $entry['trigger'] : '',
 						'status'  => isset( $entry['status'] ) ? $entry['status'] : '',
 						'archive' => isset( $entry['archive'] ) ? $entry['archive'] : '',
@@ -301,24 +304,34 @@ class BackupCommands {
 		$stored = $this->plugin->jobs()->load( $job_id );
 		$path   = null !== $stored ? (string) $stored->param( 'archive_path' ) : '';
 		if ( $porcelain ) {
-			\WP_CLI::line( $path );
-			return;
+			if ( '' !== $path && is_file( $path ) ) {
+				\WP_CLI::line( $path );
+				return;
+			}
+			// Kept on Google Drive only ("0 on this server"): there is no
+			// local path to hand to a script.
+			$remote = isset( $final['report']['remote_upload'] ) ? (array) $final['report']['remote_upload'] : array();
+			if ( ! empty( $remote['link'] ) ) {
+				\WP_CLI::line( (string) $remote['link'] );
+				return;
+			}
+			\WP_CLI::error( 'The backup is not kept on this server.' );
 		}
 
 		$report = $final['report'];
 		$remote = isset( $report['remote_upload'] ) ? (array) $report['remote_upload'] : array();
 		$backup = isset( $report['backup'] ) ? (array) $report['backup'] : array();
 		$kept   = '' !== $path && is_file( $path );
-		\WP_CLI::line( sprintf( 'Archive:  %s%s', basename( $path ), $kept ? '' : ' (removed from this server by retention: it is on Google Drive)' ) );
-		\WP_CLI::line( sprintf( 'Size:     %1$s bytes (%2$s)', number_format( (int) $report['archive_size'] ), Bytes::format( (int) $report['archive_size'] ) ) );
+		\WP_CLI::log( sprintf( 'Archive:  %s%s', basename( $path ), $kept ? '' : ' (removed from this server by retention: it is on Google Drive)' ) );
+		\WP_CLI::log( sprintf( 'Size:     %1$s bytes (%2$s)', number_format( (int) $report['archive_size'] ), Bytes::format( (int) $report['archive_size'] ) ) );
 		if ( '' !== (string) $report['sha256'] ) {
-			\WP_CLI::line( 'SHA-256:  ' . $report['sha256'] );
+			\WP_CLI::log( 'SHA-256:  ' . $report['sha256'] );
 		}
 		$db = is_array( $report['database'] ) ? $report['database'] : array();
-		\WP_CLI::line( ! empty( $db['included'] ) ? sprintf( 'Database: %1$d tables, %2$s rows', (int) $db['tables'], number_format( (int) $db['rows'] ) ) : 'Database: not included' );
+		\WP_CLI::log( ! empty( $db['included'] ) ? sprintf( 'Database: %1$d tables, %2$s rows', (int) $db['tables'], number_format( (int) $db['rows'] ) ) : 'Database: not included' );
 		if ( ! empty( $backup['gdrive'] ) ) {
 			if ( isset( $remote['status'] ) && 'uploaded' === $remote['status'] ) {
-				\WP_CLI::line( sprintf( 'Drive:    uploaded and verified (%1$s)%2$s', $remote['verified'], ! empty( $remote['link'] ) ? ' ' . $remote['link'] : '' ) );
+				\WP_CLI::log( sprintf( 'Drive:    uploaded and verified (%1$s)%2$s', $remote['verified'], ! empty( $remote['link'] ) ? ' ' . $remote['link'] : '' ) );
 			} else {
 				\WP_CLI::warning( 'Not uploaded to Google Drive: ' . ( isset( $remote['error'] ) ? $remote['error'] : 'unknown reason' ) . ' Retry with: wp shcm backup upload ' . basename( $path ) );
 			}

@@ -235,9 +235,10 @@ support tickets, so every line passes through a redactor before it is written:
 
 `uninstall.php` never deletes website content. It removes scheduled events and
 a stale maintenance flag unconditionally, and on every uninstall it asks Google to
-revoke the Drive grant (best effort) and deletes the stored tokens, keeping only
-the site's random backup identity so that earlier backups on Drive are found
-again after a reinstall; backups on Drive are never deleted. Only when the
+revoke the Drive grant (best effort) and deletes the stored tokens and account.
+What stays in `config/gdrive.php` is the site's random backup identity (so that
+earlier backups on Drive are found again after a reinstall) and the OAuth
+client ID and its secret, sealed as above; backups on Drive are never deleted. Only when the
 administrator has explicitly ticked the setting does it remove the plugin's
 own options, jobs, logs, archives, schedule and history. It does not touch
 posts, users, uploads or any table other than its own options rows.

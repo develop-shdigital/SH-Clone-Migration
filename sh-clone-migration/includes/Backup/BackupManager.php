@@ -346,7 +346,7 @@ class BackupManager {
 			throw new \InvalidArgumentException( __( 'Enter the password for encrypted backups (and keep it safe: without it the backups cannot be restored).', 'sh-clone-migration' ) );
 		}
 		if ( ! empty( $config['gdrive'] ) && ! $this->connection()->isUsable() ) {
-			throw new \InvalidArgumentException( __( 'Connect Google Drive first, or switch off "Store on Google Drive".', 'sh-clone-migration' ) );
+			throw new \InvalidArgumentException( __( 'Connect Google Drive first, or switch off "Store backups on Google Drive".', 'sh-clone-migration' ) );
 		}
 
 		$state['fingerprint'] = SiteIdentity::fingerprint();

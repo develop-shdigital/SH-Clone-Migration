@@ -78,7 +78,8 @@ trait DrivesJobs {
 	protected function progressLine( $job, $progress, &$last ) {
 		$line = sprintf( '[%5.1f%%] %s', (float) $job->get( 'progress' ), $job->get( 'message' ) );
 		if ( $progress && $line !== $last ) {
-			\WP_CLI::line( $line );
+			// log(), not line(): WP-CLI's global --quiet silences it.
+			\WP_CLI::log( $line );
 			$last = $line;
 		}
 	}

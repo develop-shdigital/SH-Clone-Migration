@@ -121,7 +121,7 @@ class DriveCommands {
 				foreach ( $files['files'] as $file ) {
 					$rows[] = array(
 						'name'    => $file['name'],
-						'created' => gmdate( 'Y-m-d H:i', (int) $file['created'] ),
+						'created' => wp_date( 'Y-m-d H:i', (int) $file['created'] ),
 						'size'    => Bytes::format( (int) $file['size'] ),
 						'kind'    => $file['kind'],
 						'id'      => $file['id'],

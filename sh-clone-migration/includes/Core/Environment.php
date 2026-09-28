@@ -525,7 +525,23 @@ class Environment {
 			return array();
 		}
 		$next  = $summary['next_run'] ? ', ' . sprintf( /* translators: %s: date */ __( 'next run %s', 'sh-clone-migration' ), wp_date( 'Y-m-d H:i', (int) $summary['next_run'] ) ) : '';
-		$last  = $summary['last'] ? ', ' . sprintf( /* translators: 1: status, 2: date */ __( 'last run %1$s %2$s', 'sh-clone-migration' ), $summary['last']['status'], wp_date( 'Y-m-d H:i', (int) ( isset( $summary['last']['started'] ) ? $summary['last']['started'] : $summary['last']['created'] ) ) ) : '';
+		$labels = array(
+			'success'   => __( 'OK', 'sh-clone-migration' ),
+			'partial'   => __( 'not uploaded', 'sh-clone-migration' ),
+			'failed'    => __( 'failed', 'sh-clone-migration' ),
+			'skipped'   => __( 'skipped', 'sh-clone-migration' ),
+			'cancelled' => __( 'cancelled', 'sh-clone-migration' ),
+		);
+		$last   = '';
+		if ( $summary['last'] ) {
+			$status = (string) $summary['last']['status'];
+			$last   = ', ' . sprintf(
+				/* translators: 1: outcome (OK, failed, ...), 2: date */
+				__( 'last run %1$s %2$s', 'sh-clone-migration' ),
+				isset( $labels[ $status ] ) ? $labels[ $status ] : $status,
+				wp_date( 'Y-m-d H:i', (int) ( isset( $summary['last']['started'] ) ? $summary['last']['started'] : $summary['last']['created'] ) )
+			);
+		}
 		$drive = $summary['drive'];
 		$state = array(
 			'not_configured' => __( 'not set up', 'sh-clone-migration' ),

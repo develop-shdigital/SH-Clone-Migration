@@ -88,7 +88,7 @@ Menu::header(
 						$shcm_entry = null !== $shcm_history ? $shcm_history->forArchive( $shcm_archive['name'] ) : null;
 						if ( null !== $shcm_entry && ! empty( $shcm_entry['kind'] ) && 'backup' === $shcm_entry['kind'] ) :
 							?>
-							<span class="shcm-tag"><?php esc_html_e( 'scheduled backup', 'sh-clone-migration' ); ?></span>
+							<span class="shcm-tag"><?php echo esc_html( isset( $shcm_entry['trigger'] ) && 'schedule' === $shcm_entry['trigger'] ? __( 'scheduled backup', 'sh-clone-migration' ) : __( 'backup', 'sh-clone-migration' ) ); ?></span>
 						<?php endif; ?>
 						<?php if ( null !== $shcm_entry && isset( $shcm_entry['remote']['status'] ) && 'uploaded' === $shcm_entry['remote']['status'] ) : ?>
 							<span class="shcm-tag shcm-tag--ok"><?php esc_html_e( 'on Google Drive', 'sh-clone-migration' ); ?></span>

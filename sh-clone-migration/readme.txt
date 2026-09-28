@@ -287,7 +287,7 @@ This is Google Drive, provided by Google LLC:
 * New: Google Drive storage through your own Google Cloud project, with only the drive.file permission (the plugin sees nothing but the files it created). Resumable uploads in 8 MB chunks survive time limits, dropped connections and rate limits; every upload is verified against the archive's checksum; keep the newest M copies on Drive, and optionally none on the server.
 * New: backup history with the result, size, checksum and Drive copy of every run; retry a failed upload from the history, or send any archive to Google Drive with `wp shcm backup upload`.
 * New: e-mail when a backup fails or is not uploaded, after every backup, or never.
-* New: WP-CLI commands `wp shcm backup now|run|schedule|history|upload|finish` and `wp shcm gdrive status|test|list|disconnect`.
+* New: WP-CLI commands `wp shcm backup now|run|schedule|history|upload` and `wp shcm gdrive status|test|list|disconnect`.
 * New: System Status shows the backup schedule, whether WP-Cron is running and the Google Drive connection.
 * The schedule, the Drive connection and the history live outside the database, so migrating or restoring a site neither carries them to another site nor replaces them; a copy of wp-content on another server pauses itself instead of pruning the original's backups.
 * Jobs are now locked while a request works on them, so a browser tab, WP-Cron and the background runner can never advance the same job at once, and cancelling a running job always takes effect.
