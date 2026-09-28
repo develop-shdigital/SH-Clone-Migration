@@ -1186,23 +1186,33 @@ class BackupManager {
 			return;
 		}
 
-		$path  = (string) $job->param( 'archive_path' );
-		$entry = $this->recordSafely(
-			$id,
-			array(
-				'kind'     => 'backup',
-				'status'   => 'failed',
-				'finished' => time(),
-				'archive'  => '' !== $path ? basename( $path ) : '',
-				'error'    => $message,
-				'local'    => array( 'kept' => false ),
-			)
-		);
+		$path = (string) $job->param( 'archive_path' );
 		// A failed export leaves a partial archive behind: remove it, it is
-		// not a backup and it only uses space.
+		// not a backup and it only uses space. A finished archive (the job
+		// failed after it, while verifying or uploading) is a backup: it stays,
+		// is recorded as kept, and its upload can be retried.
 		if ( '' !== $path && is_file( $path ) && null === \SHCM\Archive\Reader::readFooter( $path ) ) {
 			@unlink( $path );
 		}
+		$fields = array(
+			'kind'     => 'backup',
+			'status'   => 'failed',
+			'finished' => time(),
+			'archive'  => '' !== $path ? basename( $path ) : '',
+			'error'    => $message,
+			'local'    => array( 'kept' => '' !== $path && is_file( $path ) ),
+		);
+		$backup = (array) $job->param( 'backup', array() );
+		if ( ! empty( $backup['gdrive'] ) ) {
+			$remote           = (array) $job->shared( 'remote_upload', array() );
+			$fields['remote'] = isset( $remote['status'] ) && 'uploaded' === $remote['status']
+				? $this->remoteFields( $remote )
+				: array(
+					'status' => 'failed',
+					'error'  => $message,
+				);
+		}
+		$entry = $this->recordSafely( $id, $fields );
 		$this->notify( $entry, $this->config() );
 	}
 

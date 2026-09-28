@@ -276,6 +276,9 @@ class RemoteUploadStage extends AbstractStage {
 			'shcm_site' => $connection->siteId(),
 			'shcm_kind' => isset( $backup['kind'] ) && 'backup' === $backup['kind'] ? 'backup' : 'manual',
 			'shcm_job'  => $job->param( 'upload_only' ) ? (string) $job->param( 'history_id', $job->id() ) : $job->id(),
+			// When the backup was made (its archive was finished), so that a
+			// retried upload does not look like the newest backup on Drive.
+			'shcm_time' => (string) (int) @filemtime( $state['path'] ),
 			'shcm_v'    => '1',
 		);
 		if ( '' !== $state['sha256'] ) {

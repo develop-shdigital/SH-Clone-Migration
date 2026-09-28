@@ -145,20 +145,43 @@ class BackupRetentionStage extends AbstractStage {
 			return 0;
 		}
 
+		// Newest backup first, by when the backup was made (shcm_time), not
+		// when it reached Drive: a retried upload of an old backup is still an
+		// old backup and must not push newer ones out. The file just uploaded
+		// comes first among copies of the same moment.
+		$made = static function ( array $file ) {
+			$time = isset( $file['app']['shcm_time'] ) ? (string) $file['app']['shcm_time'] : '';
+			return '' !== $time && ctype_digit( $time ) ? (int) $time : (int) $file['created'];
+		};
 		usort(
 			$files,
-			static function ( $a, $b ) {
+			static function ( $a, $b ) use ( $made, $current ) {
+				$order = $made( $b ) - $made( $a );
+				if ( 0 !== $order ) {
+					return $order;
+				}
+				if ( (string) $a['id'] === $current || (string) $b['id'] === $current ) {
+					return (string) $a['id'] === $current ? -1 : 1;
+				}
 				return (int) $b['created'] - (int) $a['created'];
 			}
 		);
 
 		$kept    = 0;
 		$deleted = 0;
+		$seen    = array();
 		$history = $this->backups->history();
 		foreach ( $files as $file ) {
-			$id = (string) $file['id'];
-			if ( $id === $current || $kept < $keep ) {
+			$id        = (string) $file['id'];
+			$backup_id = isset( $file['app']['shcm_job'] ) ? (string) $file['app']['shcm_job'] : '';
+			// The same backup sent twice: the extra copy does not count as
+			// another backup, it only takes space.
+			$duplicate = '' !== $backup_id && isset( $seen[ $backup_id ] ) && $id !== $current;
+			if ( ! $duplicate && ( $id === $current || $kept < $keep ) ) {
 				++$kept;
+				if ( '' !== $backup_id ) {
+					$seen[ $backup_id ] = true;
+				}
 				continue;
 			}
 			try {
@@ -207,29 +230,52 @@ class BackupRetentionStage extends AbstractStage {
 		$candidates = array();
 		foreach ( $names as $name ) {
 			$path = $catalog->resolve( $name );
-			if ( null !== $path ) {
-				$candidates[ $name ] = (int) @filemtime( $path );
+			if ( null === $path ) {
+				continue;
 			}
+			$entry = $name === $current ? null : $history->forArchive( $name );
+			if ( null !== $entry && isset( $entry['local'] ) && is_array( $entry['local'] ) && ( ( isset( $entry['local']['kept'] ) && false === $entry['local']['kept'] ) || ! empty( $entry['local']['deleted'] ) ) ) {
+				// This backup's own file was deleted; a file of that name now is
+				// one somebody put back (to restore it): not ours to delete.
+				continue;
+			}
+			$candidates[ $name ] = (int) @filemtime( $path );
+		}
+		if ( isset( $candidates[ $current ] ) && ! $job->param( 'upload_only' ) ) {
+			// The run's own archive always counts first, whatever its mtime
+			// says after the clock was stepped back. (A retried upload of an
+			// older backup keeps its place by age.)
+			$candidates[ $current ] = PHP_INT_MAX;
 		}
 		arsort( $candidates );
 
-		$uploaded = isset( $remote['status'] ) && 'uploaded' === $remote['status'];
-		$kept     = 0;
-		$deleted  = 0;
-		$stranded = 0;
+		$uploaded   = isset( $remote['status'] ) && 'uploaded' === $remote['status'];
+		$kept       = 0;
+		$deleted    = 0;
+		$stranded   = 0;
+		$local_only = 0;
 		foreach ( array_keys( $candidates ) as $name ) {
 			if ( in_array( $name, $protected, true ) ) {
 				continue;
 			}
-			$entry = $history->forArchive( $name );
+			$entry  = $history->forArchive( $name );
+			$status = isset( $entry['remote']['status'] ) ? (string) $entry['remote']['status'] : '';
 			if ( $name === $current ) {
 				$safe = ! $gdrive || $uploaded;
 			} else {
-				$safe = ! $gdrive || ( isset( $entry['remote']['status'] ) && in_array( $entry['remote']['status'], array( 'uploaded', 'deleted', 'off' ), true ) );
+				// Judged by what happened to that backup, not by this run's
+				// settings: a local-only run must not delete the only copy of
+				// a backup whose upload failed. With "keep 0 on this server",
+				// only backups that have a copy on Drive go.
+				$safe = in_array( $status, array( 'uploaded', 'deleted' ), true ) || ( 'off' === $status && (int) $keep > 0 );
 			}
 			if ( $kept < (int) $keep || ! $safe ) {
-				if ( ! $safe && $kept >= (int) $keep ) {
-					++$stranded;
+				if ( ! $safe && $kept >= (int) $keep && $name !== $current ) {
+					if ( 'off' === $status ) {
+						++$local_only;
+					} else {
+						++$stranded;
+					}
 				}
 				++$kept;
 				continue;
@@ -254,8 +300,17 @@ class BackupRetentionStage extends AbstractStage {
 			$job->addWarning(
 				sprintf(
 					/* translators: %d: number of backups */
-					_n( '%d older backup exists only on this server because its upload to Google Drive failed; it was not deleted.', '%d older backups exist only on this server because their upload to Google Drive failed; they were not deleted.', $stranded, 'sh-clone-migration' ),
+					_n( '%d older backup exists only on this server because it was not uploaded to Google Drive; it was not deleted. Retry its upload from the history.', '%d older backups exist only on this server because they were not uploaded to Google Drive; they were not deleted. Retry their uploads from the history.', $stranded, 'sh-clone-migration' ),
 					$stranded
+				)
+			);
+		}
+		if ( $local_only > 0 ) {
+			$job->addWarning(
+				sprintf(
+					/* translators: %d: number of backups */
+					_n( '%d older backup was made before Google Drive was used and has no copy there; it was kept although "0 on this server" is set. Delete it on the Backups screen when you no longer need it.', '%d older backups were made before Google Drive was used and have no copy there; they were kept although "0 on this server" is set. Delete them on the Backups screen when you no longer need them.', $local_only, 'sh-clone-migration' ),
+					$local_only
 				)
 			);
 		}

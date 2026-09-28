@@ -19,7 +19,13 @@ defined( 'ABSPATH' ) || defined( 'SHCM_ALLOW_STANDALONE' ) || exit;
 final class History {
 
 	const DOCUMENT = 'history';
-	const MAX      = 100;
+
+	/**
+	 * Entries kept. Well above the 100 local backups a schedule may keep, so
+	 * skipped and failed runs never push a backup that is still on the
+	 * server out of the record retention works from.
+	 */
+	const MAX = 250;
 
 	/**
 	 * Store.
@@ -78,11 +84,33 @@ final class History {
 					$entries[ $found ] = $entry;
 				}
 				$saved           = $entry;
-				$data['entries'] = array_slice( $entries, 0, self::MAX );
+				$data['entries'] = self::trim( $entries );
 				return $data;
 			}
 		);
 		return $saved;
+	}
+
+	/**
+	 * Cap the list, dropping first the oldest entries whose archive is no
+	 * longer on this server (runs that were skipped, failed or pruned):
+	 * forgetting a backup that is still here would take it out of retention
+	 * for good.
+	 *
+	 * @param array[] $entries Entries, newest first.
+	 * @return array[]
+	 */
+	private static function trim( array $entries ) {
+		$excess = count( $entries ) - self::MAX;
+		for ( $i = count( $entries ) - 1; $excess > 0 && $i >= 0; $i-- ) {
+			$entry = $entries[ $i ];
+			$gone  = empty( $entry['archive'] ) || ( isset( $entry['local']['kept'] ) && false === $entry['local']['kept'] );
+			if ( $gone ) {
+				unset( $entries[ $i ] );
+				--$excess;
+			}
+		}
+		return array_slice( array_values( $entries ), 0, self::MAX );
 	}
 
 	/**

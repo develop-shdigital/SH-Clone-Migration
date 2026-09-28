@@ -57,12 +57,19 @@ if ( is_file( $shcm_storage . '/config/gdrive.php' ) && is_file( __DIR__ . '/inc
 		require_once __DIR__ . '/includes/bootstrap.php';
 		if ( class_exists( '\SHCM\Remote\GoogleDrive\OAuth' ) ) {
 			$shcm_connection = new \SHCM\Remote\GoogleDrive\Connection( new \SHCM\Backup\ConfigStore( $shcm_storage . '/config' ), \SHCM\Security\SecretBox::fromWordPress() );
-			( new \SHCM\Remote\GoogleDrive\OAuth( $shcm_connection, new \SHCM\Remote\Http\WordPressTransport(), \SHCM\Remote\GoogleDrive\Endpoints::resolve() ) )->revoke();
+			try {
+				( new \SHCM\Remote\GoogleDrive\OAuth( $shcm_connection, new \SHCM\Remote\Http\WordPressTransport(), \SHCM\Remote\GoogleDrive\Endpoints::resolve() ) )->revoke();
+			} catch ( \Throwable $shcm_error ) {
+				unset( $shcm_error ); // Offline: the tokens are removed below all the same.
+			}
+			// Tokens, account and folder go; the site's backup identity stays,
+			// so after a reinstall its earlier backups on Drive are found (and
+			// pruned) again.
+			$shcm_connection->disconnect();
 		}
 	} catch ( \Throwable $shcm_error ) {
 		unset( $shcm_error );
 	}
-	@unlink( $shcm_storage . '/config/gdrive.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
 }
 
 if ( ! $shcm_full ) {

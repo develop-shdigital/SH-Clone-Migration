@@ -252,6 +252,12 @@ final class ConfigStore {
 				// empty document plus this change.
 				throw new \RuntimeException( implode( ' ', $this->problems( array( $name ) ) ) );
 			}
+			if ( $this->damaged( $name ) ) {
+				// Start again, but keep the damaged file next to it (still
+				// guarded by its first line) for anyone who wants to recover it.
+				@rename( $path, $this->directory . '/' . $name . '.damaged-' . gmdate( 'Ymd-His' ) . '.php' );
+				clearstatcache( true, $path );
+			}
 			$data = $mutator( $this->read( $name ) );
 			if ( ! is_array( $data ) ) {
 				throw new \RuntimeException( 'A configuration update must return an array.' );

@@ -837,9 +837,9 @@ class BackupFoundationTest extends TestCase {
 			$history->record( 'e' . $i, array( 'status' => 'success' ) );
 		}
 		$all = $history->all( 1000 );
-		$this->assertSame( 100, History::MAX );
+		$this->assertGreaterThan( \SHCM\Backup\Schedule::MAX_KEEP_LOCAL, History::MAX, 'room for every local backup plus skipped and failed runs' );
 		$this->assertCount( History::MAX, $all );
-		$this->assertSame( 'e104', $all[0]['id'] );
+		$this->assertSame( 'e' . ( History::MAX + 4 ), $all[0]['id'] );
 		$this->assertSame( 'e5', $all[ History::MAX - 1 ]['id'] );
 		$this->assertNull( $history->get( 'e4' ) );
 		$this->assertNull( $history->get( 'a' ) );
@@ -952,11 +952,18 @@ class BackupFoundationTest extends TestCase {
 		$this->assertSame( 'x1', $history->forArchive( 'no-kind.wpress' )['id'] );
 
 		// An entry recreated without its kind: a late update of a backup
-		// whose entry was pushed out by History::MAX newer ones.
+		// whose entry was pushed out by History::MAX newer ones (that still
+		// have their archives, so the cap has nothing else to drop).
 		$history->record( 'b1', array( 'status' => 'success' ) );
 		$this->assertSame( array( 'backup.wpress' ), $history->archiveNames() );
 		for ( $i = 0; $i < History::MAX; $i++ ) {
-			$history->record( 'e' . $i, array( 'status' => 'success' ) );
+			$history->record(
+				'e' . $i,
+				array(
+					'status'  => 'success',
+					'archive' => 'e' . $i . '.wpress',
+				)
+			);
 		}
 		$this->assertNull( $history->get( 'b1' ) );
 		$history->record(
@@ -967,6 +974,36 @@ class BackupFoundationTest extends TestCase {
 			)
 		);
 		$this->assertSame( array(), $history->archiveNames() );
+	}
+
+	public function testTheCapDropsRunsWithoutAnArchiveBeforeBackupsStillHere() {
+		$history = new History( $this->store() );
+		$history->record(
+			'kept',
+			array(
+				'kind'    => 'backup',
+				'archive' => 'oldest-still-here.wpress',
+				'local'   => array( 'kept' => true ),
+			)
+		);
+		$history->record(
+			'pruned',
+			array(
+				'kind'    => 'backup',
+				'archive' => 'pruned.wpress',
+				'local'   => array(
+					'kept'    => false,
+					'deleted' => time(),
+				),
+			)
+		);
+		for ( $i = 0; $i < History::MAX; $i++ ) {
+			$history->record( 'skipped-' . $i, array( 'kind' => 'skipped' ) );
+		}
+		$this->assertCount( History::MAX, $history->all( 1000 ) );
+		$this->assertNotNull( $history->get( 'kept' ), 'a backup still on the server stays in the record' );
+		$this->assertNull( $history->get( 'pruned' ) );
+		$this->assertContains( 'oldest-still-here.wpress', $history->archiveNames() );
 	}
 
 	public function testRecordedArchivesListsEveryKind() {

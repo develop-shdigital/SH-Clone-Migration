@@ -230,10 +230,13 @@ support tickets, so every line passes through a redactor before it is written:
 ## Uninstall
 
 `uninstall.php` never deletes website content. It removes scheduled events and
-a stale maintenance flag unconditionally, and only when the administrator has
-explicitly ticked the setting does it remove the plugin's own options, jobs,
-logs and archives. It does not touch posts, users, uploads or any table other
-than its own options rows.
+a stale maintenance flag unconditionally, and on every uninstall it revokes the
+Google Drive grant (best effort) and deletes the stored tokens, keeping only
+the site's random backup identity so that earlier backups on Drive are found
+again after a reinstall; backups on Drive are never deleted. Only when the
+administrator has explicitly ticked the setting does it remove the plugin's
+own options, jobs, logs, archives, schedule and history. It does not touch
+posts, users, uploads or any table other than its own options rows.
 
 ## Reporting a vulnerability
 

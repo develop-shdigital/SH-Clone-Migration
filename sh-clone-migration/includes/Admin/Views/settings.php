@@ -155,7 +155,7 @@ Menu::header(
 			<th scope="row"><label for="shcm-max-archives"><?php esc_html_e( 'Maximum stored archives', 'sh-clone-migration' ); ?></label></th>
 			<td>
 				<input type="number" id="shcm-max-archives" name="max_archives" min="0" max="500" value="<?php echo esc_attr( $shcm_values['max_archives'] ); ?>" class="small-text">
-				<span class="description"><?php esc_html_e( '0 keeps every archive.', 'sh-clone-migration' ); ?></span>
+				<span class="description"><?php esc_html_e( 'manual exports and uploaded archives; 0 keeps every archive. Scheduled backups follow their own limits on the Scheduled Backups screen.', 'sh-clone-migration' ); ?></span>
 			</td>
 		</tr>
 		<tr>

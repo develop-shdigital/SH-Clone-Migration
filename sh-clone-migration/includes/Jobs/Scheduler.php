@@ -279,7 +279,9 @@ class Scheduler {
 		$removed = 0;
 		foreach ( $catalog->all() as $archive ) {
 			$name = (string) $archive['name'];
-			if ( isset( $skip[ $name ] ) ) {
+			// Also spared by name: a backup the history forgot (its file was
+			// damaged and set aside) is still a backup, with its own limits.
+			if ( isset( $skip[ $name ] ) || preg_match( '/-backup-\d{8}-\d{4}-[a-f0-9]+\.wpress$/', $name ) ) {
 				continue;
 			}
 			++$counted;
@@ -300,7 +302,16 @@ class Scheduler {
 			return array();
 		}
 		try {
-			$history = $this->plugin->backups()->history();
+			$backups = $this->plugin->backups();
+			if ( method_exists( $backups, 'store' ) ) {
+				// A damaged history reads as "no backups": every backup would
+				// then count as a manual archive here.
+				$store = $backups->store();
+				if ( ! $store->readable( \SHCM\Backup\History::DOCUMENT ) || $store->damaged( \SHCM\Backup\History::DOCUMENT ) ) {
+					return null;
+				}
+			}
+			$history = $backups->history();
 			// Every archive the history knows, not only the ones retention
 			// manages: an entry without a kind must not become prunable here.
 			$names = method_exists( $history, 'recordedArchives' ) ? $history->recordedArchives() : $history->archiveNames();
