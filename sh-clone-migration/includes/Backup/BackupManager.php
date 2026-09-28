@@ -953,9 +953,33 @@ class BackupManager {
 			)
 		);
 		$path = (string) $job->param( 'archive_path' );
-		if ( '' !== $path && is_file( $path ) && null === \SHCM\Archive\Reader::readFooter( $path ) ) {
-			@unlink( $path );
+		if ( '' === $path || ! is_file( $path ) ) {
+			return;
 		}
+		if ( null === \SHCM\Archive\Reader::readFooter( $path ) ) {
+			@unlink( $path );
+			return;
+		}
+		// Cancelled after the archive was finished (while uploading it): it is
+		// a complete backup. Record it, so retention manages it and the
+		// upload can be retried, instead of leaving an unlisted file behind.
+		$backup = (array) $job->param( 'backup', array() );
+		$fields = array(
+			'archive' => basename( $path ),
+			'size'    => (int) @filesize( $path ),
+			'sha256'  => (string) $job->shared( 'archive_sha256', '' ),
+			'local'   => array( 'kept' => true ),
+		);
+		if ( ! empty( $backup['gdrive'] ) ) {
+			$remote = (array) $job->shared( 'remote_upload', array() );
+			$fields['remote'] = isset( $remote['status'] ) && 'uploaded' === $remote['status']
+				? $this->remoteFields( $remote )
+				: array(
+					'status' => 'failed',
+					'error'  => __( 'Upload cancelled.', 'sh-clone-migration' ),
+				);
+		}
+		$this->history()->record( $id, $fields );
 	}
 
 	/**

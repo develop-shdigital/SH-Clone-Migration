@@ -222,13 +222,34 @@ is "files-only backup has no database" "$db" "false"
 
 echo
 echo "--- 7. Cancel, and the browser fallback without loopbacks --------"
+t0=$(date +%s)
 r=$(ajax start_backup gdrive=0 contents=full)
 JOB7=$(echo "$r" | jq -r '.data.id')
-sleep 3
+took=$(( $(date +%s) - t0 ))
+[ "$took" -le 8 ]; check "\"Back up now\" answers at once (${took}s), the rest runs in the background" $?
 ajax cancel "job_id=$JOB7" >/dev/null
 wait_job "$JOB7" status 120 >/dev/null
 is "cancelled backup ends cancelled" "$(cat "$WORK/last-status")" "cancelled"
 is "history: cancelled" "$(history_field "$JOB7" .status)" "cancelled"
+[ -z "$(history_field "$JOB7" '.archive // empty')" ] && ! ls "$ROOT"/wp-content/shcm-storage/archives/*.part >/dev/null 2>&1
+check "the half-written archive is not kept" $?
+# Cancel while the upload waits for a retry (deterministic: the upload stalls).
+wpc option update shcm_test_backoff "20,20,20,20,20,20" >/dev/null
+control '{"fail":[{"method":"PUT","path":"/upload/drive/v3/files","status":503,"times":50}]}'
+r=$(ajax start_backup gdrive=1 contents=database)
+JOBC=$(echo "$r" | jq -r '.data.id')
+for i in $(seq 1 60); do
+	ajax status "job_id=$JOBC" | jq -r '.data.message // ""' | grep -qi 'retry' && break
+	sleep 1
+done
+ajax cancel "job_id=$JOBC" >/dev/null
+wait_job "$JOBC" status 60 >/dev/null
+is "cancelled while waiting to retry the upload" "$(cat "$WORK/last-status")" "cancelled"
+ARCHC=$(history_field "$JOBC" .archive)
+[ -n "$ARCHC" ] && [ -f "$ROOT/wp-content/shcm-storage/archives/$ARCHC" ]; check "its finished archive is kept and listed" $?
+is "and offered for a retried upload" "$(history_field "$JOBC" .remote.status)" "failed"
+control '{"clear_faults":true}'
+wpc option update shcm_test_backoff "1,1,1,1,1,1" >/dev/null
 wpc option update shcm_test_no_loopback 1 >/dev/null
 r=$(ajax start_backup gdrive=0)
 JOB8=$(echo "$r" | jq -r '.data.id')
@@ -290,7 +311,7 @@ echo
 echo "--- 10. No secret in logs, job files or plain config -------------"
 leaks=$(grep -rlE 'ya29\.fake|1//fake|GOCSPX-fake|upload_id=[A-Za-z0-9]' "$ROOT/wp-content/shcm-storage/logs" "$ROOT/wp-content/shcm-storage/jobs" "$ROOT/wp-content/shcm-storage/config" 2>/dev/null | wc -l)
 is "files containing a token, secret or session URI" "$leaks" "0"
-dbleak=$(cd "$ROOT" && wp --allow-root db query "SELECT COUNT(*) FROM $(wp --allow-root db prefix 2>/dev/null)options WHERE option_value LIKE '%fake-secret%' OR option_value LIKE '%1//fake%'" --skip-column-names 2>/dev/null)
+dbleak=$(wpe 'global $wpdb; $q = chr( 39 ); echo (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_value LIKE {$q}%fake-secret%{$q} OR option_value LIKE {$q}%1//fake%{$q} OR option_value LIKE {$q}%ya29.fake%{$q}" );')
 is "database rows containing Drive secrets" "$dbleak" "0"
 
 echo

@@ -293,7 +293,10 @@ class Scheduler {
 			return array();
 		}
 		try {
-			$names = $this->plugin->backups()->history()->archiveNames();
+			$history = $this->plugin->backups()->history();
+			// Every archive the history knows, not only the ones retention
+			// manages: an entry without a kind must not become prunable here.
+			$names = method_exists( $history, 'recordedArchives' ) ? $history->recordedArchives() : $history->archiveNames();
 		} catch ( \Throwable $e ) {
 			$this->plugin->logger()->error( 'Reading the backup history failed: ' . $e->getMessage() );
 			return null;

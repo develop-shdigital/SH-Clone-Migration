@@ -148,6 +148,25 @@ final class History {
 	}
 
 	/**
+	 * Base names of every archive the history mentions, whatever the kind.
+	 *
+	 * For code that must keep its hands off archives the backup feature
+	 * knows about (the max_archives housekeeping), where listing too many is
+	 * the safe mistake; retention uses archiveNames().
+	 *
+	 * @return string[]
+	 */
+	public function recordedArchives() {
+		$names = array();
+		foreach ( $this->entries() as $entry ) {
+			if ( ! empty( $entry['archive'] ) ) {
+				$names[] = (string) $entry['archive'];
+			}
+		}
+		return array_values( array_unique( $names ) );
+	}
+
+	/**
 	 * The most recent entry with one of the given statuses.
 	 *
 	 * @param string[] $statuses Statuses.

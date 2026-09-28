@@ -80,15 +80,22 @@ class BackgroundRunner {
 	/**
 	 * Advance a background job by one slice and arrange the next one.
 	 *
-	 * @param Job $job Job.
+	 * @param Job      $job     Job.
+	 * @param int|null $seconds Length of this slice; null for the usual
+	 *                          request budget. A request that a person is
+	 *                          waiting on (Back up now) keeps it short.
 	 * @return Job
 	 */
-	public function drive( Job $job ) {
+	public function drive( Job $job, $seconds = null ) {
 		if ( ! $job->isRunnable() || ! $job->param( 'background' ) ) {
 			return $job;
 		}
+		$budget = null;
+		if ( null !== $seconds ) {
+			$budget = \SHCM\Jobs\Budget::create( max( 1, (int) $seconds ), $this->plugin->settings()->getInt( 'memory_guard', 80 ) );
+		}
 		$started = microtime( true );
-		$job     = $this->plugin->runner()->tick( $job );
+		$job     = $this->plugin->runner()->tick( $job, $budget );
 		if ( $job->runtime( 'busy' ) ) {
 			// Another request holds the job; it arranges the next slice.
 			return $job;

@@ -25,6 +25,13 @@ class BackupController {
 	const STATE_TTL       = 900;
 
 	/**
+	 * Seconds of work done in the request that starts a backup or an upload:
+	 * enough to get going, short enough that the page answers at once. The
+	 * rest runs in the background.
+	 */
+	const FIRST_SLICE = 3;
+
+	/**
 	 * Container.
 	 *
 	 * @var Plugin
@@ -105,7 +112,7 @@ class BackupController {
 		$token = (string) $job->runtime( 'token', '' );
 		$this->plugin->logger()->channel( $job->id() )->info( sprintf( 'Backup requested by user %d.', get_current_user_id() ) );
 
-		$job = $this->backups()->runner()->drive( $job );
+		$job = $this->backups()->runner()->drive( $job, self::FIRST_SLICE );
 
 		$snapshot          = $this->controller->snapshot( $job );
 		$snapshot['token'] = $token;
@@ -127,7 +134,7 @@ class BackupController {
 		}
 		$job   = $this->backups()->startUpload( $archive, '' !== $history ? 'backup' : 'manual', $history );
 		$token = (string) $job->runtime( 'token', '' );
-		$job   = $this->backups()->runner()->drive( $job );
+		$job   = $this->backups()->runner()->drive( $job, self::FIRST_SLICE );
 
 		$snapshot          = $this->controller->snapshot( $job );
 		$snapshot['token'] = $token;

@@ -930,6 +930,15 @@ class BackupFoundationTest extends TestCase {
 		$this->assertSame( array(), $history->archiveNames() );
 	}
 
+	public function testRecordedArchivesListsEveryKind() {
+		$history = new History( $this->store() );
+		$history->record( 'a', array( 'kind' => 'backup', 'archive' => 'backup.wpress' ) );
+		$history->record( 'b', array( 'archive' => 'kindless.wpress' ) );
+		$history->record( 'c', array( 'kind' => 'failed' ) );
+		$this->assertSame( array( 'kindless.wpress', 'backup.wpress' ), $history->recordedArchives() );
+		$this->assertSame( array( 'backup.wpress' ), $history->archiveNames() );
+	}
+
 	public function testLatestByStatus() {
 		$history = new History( $this->store() );
 		$this->assertNull( $history->latest() );
