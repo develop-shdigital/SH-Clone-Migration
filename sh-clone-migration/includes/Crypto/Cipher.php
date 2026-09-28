@@ -243,7 +243,9 @@ class Cipher {
 			$plain = @sodium_crypto_aead_xchacha20poly1305_ietf_decrypt( $ct, '', $nonce, $this->key );
 			return false === $plain ? null : $plain;
 		}
-		if ( strlen( $blob ) <= 28 ) {
+		// IV (12) and tag (16) are required; an empty plaintext leaves no
+		// ciphertext, so exactly 28 bytes is a valid block.
+		if ( strlen( $blob ) < 28 ) {
 			return null;
 		}
 		$iv    = substr( $blob, 0, 12 );

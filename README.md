@@ -5,9 +5,11 @@ Complete WordPress website cloning and migration system.
 SH Clone Migration exports an entire WordPress installation — the whole
 database plus every file under `wp-content` — into a single portable
 `.wpress` archive, and restores it onto any other WordPress installation.
-There are no size caps, no premium tier, no license keys and no external
-services: the archive travels from source to destination and nothing else is
-involved.
+There are no size caps, no premium tier and no license keys. A migration
+involves no external service: the archive travels from source to destination
+and nothing else is involved. It can also make scheduled backups (daily,
+weekly, monthly or on demand) and, if you connect it, keep copies on your own
+Google Drive.
 
 ```
 Source WordPress  ──▶  site.wpress  ──▶  Destination WordPress
@@ -23,6 +25,7 @@ Source WordPress  ──▶  site.wpress  ──▶  Destination WordPress
 - [Exporting a site](#exporting-a-site)
 - [Importing a site](#importing-a-site)
 - [Large sites](#large-sites)
+- [Scheduled backups and Google Drive](#scheduled-backups-and-google-drive)
 - [WP-CLI](#wp-cli)
 - [Search and replace](#search-and-replace)
 - [Settings](#settings)
@@ -223,6 +226,86 @@ only by the destination's disk, not by the plugin.
   `wp-content/shcm-storage/archives/` over SFTP and register it on the Import
   screen, or point WP-CLI at it.
 
+## Scheduled backups and Google Drive
+
+**SH Clone Migration → Scheduled Backups** makes backups automatically and,
+if you like, keeps copies on your own Google Drive. A backup is an ordinary
+`.wpress` archive, made, verified and fingerprinted (SHA-256) exactly like a
+manual export, so it can be restored on the Import screen of any site.
+
+**When.** Only on demand, daily, weekly (pick the day) or monthly (pick the
+day, or "last day"), at a time of day in the site's timezone. **Back Up Now**
+works at any time and keeps running in the background if you leave the page.
+
+**What.** Database and files, the database only, or the files only; WordPress
+core files on request; extra exclusion patterns.
+
+**Where, and how many.** Keep the newest *N* backups on the server and,
+optionally, the newest *M* on Google Drive. Only backups count: manual exports
+are never deleted. With Google Drive you can keep 0 on the server, in which
+case each backup is deleted locally once its copy on Drive has been verified.
+A backup whose upload failed is always kept on the server.
+
+**Encryption.** Optionally with a password, which is then stored encrypted
+with the keys in `wp-config.php` so backups can run unattended. Keep a copy of
+it: a backup cannot be restored without it.
+
+**E-mail.** When a backup fails or is not uploaded (default), after every
+backup, or never.
+
+### Connecting Google Drive
+
+Backups go to your own Google account through your own Google Cloud project,
+so no third party is involved. The plugin asks only for the `drive.file`
+permission: it can see and change **only the files it created itself**,
+never anything else in your Drive. Setting it up takes about five minutes,
+once:
+
+1. In the [Google Cloud console](https://console.cloud.google.com/projectcreate),
+   create a project and enable the **Google Drive API**.
+2. Under **Google Auth Platform**, fill in *Branding* (an app name and your
+   e-mail; no logo needed), choose the audience **External** and add the scope
+   `.../auth/drive.file` under *Data Access*.
+3. Under *Audience*, click **Publish app** so the status is **In production**.
+   In "Testing" status Google stops the access after 7 days and uploads would
+   stop. `drive.file` needs no verification by Google.
+4. Under *Clients*, create an OAuth client of type **Web application** with the
+   authorized redirect URI shown on the Scheduled Backups screen (it is your
+   site's `/wp-admin/admin-post.php`).
+5. Paste the client ID and secret on the Scheduled Backups screen and click
+   **Connect Google Drive**.
+
+Google requires HTTPS for the redirect URI (only `localhost` is exempt). The
+client ID and secret can also be set in `wp-config.php` as
+`SHCM_GDRIVE_CLIENT_ID` and `SHCM_GDRIVE_CLIENT_SECRET`.
+
+Uploads are resumable, a few megabytes per request, so multi-gigabyte backups
+work on ordinary hosting. Each copy is checked against the size and checksum
+Google reports. Temporary errors are retried for about half an hour; if Google
+revokes the access, the screen says so and **Reconnect** fixes it.
+
+To restore a backup that is only on Google Drive, download it from Drive and
+upload it on the Import screen.
+
+### Running on time
+
+Backups run through WP-Cron, which WordPress triggers when the site gets
+visits. On a quiet site, or with `DISABLE_WP_CRON`, add a system cron job:
+
+```
+*/5 * * * * cd /path/to/wordpress && wp shcm backup run --quiet
+```
+
+### Copies of the site
+
+The schedule, the Google Drive connection and the backup history are kept in
+`wp-content/shcm-storage/config/`, not in the database. Exports never include
+them and imports never replace them, so a staging copy made with this plugin
+never inherits production's schedule or Drive access. If the whole site is
+copied by other means (a host's staging tool), the copy notices that it is not
+the site that set the schedule up and pauses it until you confirm on the
+Scheduled Backups screen.
+
 ## WP-CLI
 
 ```bash
@@ -242,6 +325,14 @@ wp shcm cancel <job>
 wp shcm rollback <job> --yes                    # undo an import
 wp shcm search-replace https://old.test https://new.test --dry-run
 wp shcm doctor                                  # system status report
+
+wp shcm backup now                              # back up with the scheduled settings
+wp shcm backup now --contents=database --no-upload
+wp shcm backup run                              # run the scheduled backup if due (system cron)
+wp shcm backup schedule                         # show the schedule
+wp shcm backup history
+wp shcm backup upload <archive>                 # send an archive to Google Drive
+wp shcm gdrive status | test | list | disconnect
 ```
 
 Every command exits non-zero on failure and prints a plain error message.

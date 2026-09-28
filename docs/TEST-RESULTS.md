@@ -3,8 +3,122 @@
 Two suites back this plugin: an automated PHPUnit suite that runs anywhere,
 and a full end-to-end migration between two real WordPress installations.
 Version 1.0.1 added tests that run inside WordPress against a real database,
-an edge-case migration, and a download test against Apache; they are
-summarised first.
+an edge-case migration, and a download test against Apache. Version 1.1.0
+added scheduled backups and Google Drive storage, tested against a fake
+Google server and reviewed adversarially; that is summarised first.
+
+---
+
+## Version 1.1.0: scheduled backups and Google Drive
+
+### What was run on the final code
+
+| Suite | Result |
+|---|---|
+| PHPUnit (unit and integration), PHP 8.4 | **413 tests, 175,000 assertions, 0 failures** (1 skipped: a permission test that cannot fail as root; run as www-data it passes) |
+| Backup end-to-end, `scripts/backup-e2e.sh` (Apache + PHP-FPM, real WP-Cron and loopbacks, fake Google server) | **87 / 87** |
+| Fake Google server self-test, `tests/fake-google/selftest.sh` | **110 / 110** |
+| Migration end-to-end, `scripts/e2e.sh` | **81 / 81** |
+| Edge-case migration, `scripts/e2e-edge.sh` | **27 / 27** |
+| Download endpoint, `scripts/download-test.sh` | **29 / 29** |
+| Import safety, `tests/db/import-safety-test.php` | **0 failures** |
+| Database engine, `tests/db/database-engine-test.php` | **0 failures** in 3 of 4 runs; the other run, made while the machine was fully loaded by parallel test runs, missed the "1 microsecond statement time limit" check (the database engine is unchanged since 1.0.1) |
+| Browser (Chromium via Playwright): Scheduled Backups and Backups screens at 1280 px and 390 px | no JavaScript error, no horizontal scrolling, no untranslated placeholder |
+
+The translation template was regenerated (757 strings) without a single
+"placeholder without translator comment" warning.
+
+### The backup end-to-end test
+
+`scripts/backup-e2e.sh` drives the source test site the way an owner would,
+with every Google endpoint pointed at `tests/fake-google/router.php`, a PHP
+implementation of Google's OAuth, Drive v3 and resumable-upload protocols
+with fault injection. It checks, among other things:
+
+* connecting Google Drive through the real OAuth redirect flow, a replayed
+  callback and a forged state;
+* a daily schedule arming its WP-Cron event, and invalid keep counts refused;
+* Back Up Now answering within seconds while the site finishes the backup by
+  itself (loopback requests), uploaded in several chunks without an
+  Authorization header on chunk requests, verified by SHA-256 against the
+  bytes on the fake Drive, tagged with the site's private appProperties;
+* scheduled runs fired by WP-Cron over HTTP, retention on Drive and on the
+  server, the next run moved on;
+* two 503 answers retried, a lost upload session restarted, a revoked grant
+  kept locally and e-mailed, the connection reconnected and the upload retried;
+* encrypted database-only and files-only backups made and verified by WP-CLI;
+* cancelling right after the start and while an upload waits for a retry
+  (the finished archive is kept and offered for a retried upload), a restore
+  refused while a backup runs, and the browser driving the backup when
+  loopbacks are blocked;
+* a copy of the site pausing its schedule until confirmed, settings written by
+  WP-CLI as root and still readable by PHP, an unreadable settings file
+  reported and never overwritten;
+* a manual export sent to Drive, never pruned, marked on the Backups screen and
+  not sent twice; "keep 0 on this server";
+* the history's Download link, no token, secret or session URI in any log, job
+  file, settings file or database row, and `SHCM_DISABLE_BACKUPS` switching
+  the feature off (a running backup is cancelled and recorded) and on again.
+
+### New unit tests
+
+Among the 413: the schedule (next runs around daylight-saving changes,
+including gaps that cross midnight; the reviewers also brute-forced all 421
+time zones from 2025 to 2027), the settings store (atomic,
+locked, readable across system accounts, damaged files set aside), the
+history, SecretBox and the cipher, the job lock (stale copies, lost cancels,
+dead requests), the WP-Cron worker, the Google Drive client and OAuth (token
+refresh races, folder races, error mapping, redaction), the log redactor, the
+upload stage against an in-memory Google emulator (19 tests: chunking,
+verification by SHA-256, MD5 and size, backoff, four failed chunks in a row,
+expired sessions, partial acknowledgements, a 308 covering the whole file,
+revoked grants, exhausted retries) and retention (19 tests: ranking by backup
+time, duplicates, only copies, keep 0, the history cap, damaged history, files
+put back by hand, clock steps, failed backups with complete archives,
+uninstall keeping the site identity). For each regression test the fix was
+reverted in a scratch copy to confirm the test fails without it.
+
+### Adversarial review
+
+Seven reviewers, one per risk area, and a completeness critic examined the
+feature. Each finding had to come with a reproduction. All 62 findings were
+fixed and re-checked with the reviewer's own reproduction:
+
+| Area | Critical | Major | Minor |
+|---|---|---|---|
+| Running without a browser, job concurrency | 1 | 3 | 5 |
+| When backups run (schedule, WP-Cron, identity) | 2 | 3 | 6 |
+| Google Drive upload | 0 | 1 | 1 |
+| What gets deleted (retention) | 2 | 3 | 6 |
+| Security | 0 | 2 | 3 |
+| Screens, WP-CLI, documentation | 0 | 1 | 13 |
+| Interplay with migrations and hosting | 0 | 3 | 1 |
+| Completeness critic (end-to-end scenarios) | 0 | 2 | 4 |
+| **Total** | **5** | **18** | **39** |
+
+The critical ones: a request that dies on the same step (a fatal error, the
+memory limit, a server timeout) was retried forever while every later
+scheduled run was skipped; a full disk killed wp-cron.php and retried every
+minute without an e-mail; a legitimate change of the site's fingerprint
+paused backups silently; retrying the upload of an old backup deleted the
+newest one from Drive; a run without Drive deleted backups whose upload had
+failed, their only copies.
+
+Earlier, a first review of each module (schedule, job runner, Drive client,
+fake server) had found and fixed 22 further issues, among them job copies
+loaded mid-tick redoing finished work, lost cancels, keep counts clamped
+instead of refused, a token-refresh race and a folder-creation race.
+
+### Found by running the end-to-end test
+
+* Settings files written by WP-CLI as root (mode 0640) could not be read by
+  PHP-FPM, which then saw an empty schedule and dropped the WP-Cron event
+  without a trace. Files are now 0644 (or `FS_CHMOD_FILE`), a file that exists
+  but cannot be read is reported and never overwritten, and new directories
+  take the owner and permissions of `shcm-storage`.
+* Every backup failure was recorded and e-mailed as "The backup failed."
+  without its reason: the handler read the message from an array, while the
+  job runner passes the exception.
 
 ---
 

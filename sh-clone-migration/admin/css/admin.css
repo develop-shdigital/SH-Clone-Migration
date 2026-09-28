@@ -491,3 +491,28 @@
 	max-width: 100%;
 	overflow-x: auto;
 }
+
+/* Scheduled backups */
+.shcm-panel__actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.shcm-tag--ok { background: #edfaef; color: #17612b; }
+.shcm-tag--danger { background: #fcf0f1; color: #8a1f21; }
+.shcm-status--pending,
+.shcm-status--cancelled { background: #f0f0f1; color: #50575e; }
+.shcm-status--partial { background: #fcf9e8; color: #8a6d1b; }
+.shcm-when { display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.75rem; }
+.shcm-when select,
+.shcm-when input { margin: 0; }
+.shcm-muted { opacity: 0.6; }
+.shcm-backup-now { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; }
+.shcm-backup-now .shcm-inline { margin-left: 0; }
+.shcm-steps { margin-left: 1.25rem; }
+.shcm-steps li { margin-bottom: 0.5rem; line-height: 1.5; }
+.shcm-copy { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.25rem; }
+.shcm-copy code { word-break: break-all; }
+.shcm-grid__full { grid-column: 1 / -1; }
+.shcm-setup-guide { margin-bottom: 1rem; }
+#shcm-schedule-alerts:empty { display: none; }
+
+@media screen and (max-width: 782px) {
+	.shcm-when { display: flex; margin: 0.5rem 0 0; }
+}

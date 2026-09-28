@@ -15,10 +15,23 @@ VERSION=$(grep -m1 "^ \* Version:" "$ROOT/$NAME/$NAME.php" | awk '{print $3}')
 rm -rf "$OUT/$NAME" "$OUT/$NAME-$VERSION.zip"
 mkdir -p "$OUT"
 
-rsync -a \
-	--exclude 'vendor/' \
-	--exclude 'tests/' \
-	--exclude '.phpunit.cache/' \
+# Only files under version control ship, so leftovers in the working copy
+# (scratch files, test output) never end up in a release.
+FILES=( --files-from=- --from0 --ignore-missing-args )
+if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	FILES=()
+fi
+
+list_files() {
+	if [ ${#FILES[@]} -gt 0 ]; then
+		git -C "$ROOT/$NAME" ls-files -z
+	fi
+}
+
+list_files | rsync -a "${FILES[@]}" \
+	--exclude 'vendor/***' \
+	--exclude 'tests/***' \
+	--exclude '.phpunit.cache/***' \
 	--exclude '.phpunit.result.cache' \
 	--exclude 'composer.json' \
 	--exclude 'composer.lock' \

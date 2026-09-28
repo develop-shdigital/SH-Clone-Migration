@@ -284,6 +284,7 @@ class Environment {
 				'value' => $this->downloadDelivery( true )['value'],
 			),
 		);
+		$rows = array_merge( $rows, $this->backupRows() );
 
 		return array(
 			'rows'         => $rows,
@@ -493,6 +494,151 @@ class Environment {
 			);
 		}
 
+		return array_merge( $warnings, $this->backupWarnings() );
+	}
+
+	/**
+	 * State of scheduled backups, when the feature is available. Reads local
+	 * files only: never calls Google or refreshes a token on a page load.
+	 *
+	 * @return array|null
+	 */
+	protected function backupSummary() {
+		if ( ! class_exists( Plugin::class ) || ! Plugin::backupsAvailable() || ! function_exists( 'shcm_bootstrap' ) ) {
+			return null;
+		}
+		try {
+			return shcm_bootstrap()->backups()->summary();
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+	}
+
+	/**
+	 * System status rows about backups.
+	 *
+	 * @return array
+	 */
+	protected function backupRows() {
+		$summary = $this->backupSummary();
+		if ( null === $summary ) {
+			return array();
+		}
+		$next  = $summary['next_run'] ? ', ' . sprintf( /* translators: %s: date */ __( 'next run %s', 'sh-clone-migration' ), wp_date( 'Y-m-d H:i', (int) $summary['next_run'] ) ) : '';
+		$labels = array(
+			'success'   => __( 'OK', 'sh-clone-migration' ),
+			'partial'   => __( 'not uploaded', 'sh-clone-migration' ),
+			'failed'    => __( 'failed', 'sh-clone-migration' ),
+			'skipped'   => __( 'skipped', 'sh-clone-migration' ),
+			'cancelled' => __( 'cancelled', 'sh-clone-migration' ),
+		);
+		$last   = '';
+		if ( $summary['last'] ) {
+			$status = (string) $summary['last']['status'];
+			$last   = ', ' . sprintf(
+				/* translators: 1: outcome (OK, failed, ...), 2: date */
+				__( 'last run %1$s %2$s', 'sh-clone-migration' ),
+				isset( $labels[ $status ] ) ? $labels[ $status ] : $status,
+				wp_date( 'Y-m-d H:i', (int) ( isset( $summary['last']['started'] ) ? $summary['last']['started'] : $summary['last']['created'] ) )
+			);
+		}
+		$drive = $summary['drive'];
+		$state = array(
+			'not_configured' => __( 'not set up', 'sh-clone-migration' ),
+			'not_connected'  => __( 'not connected', 'sh-clone-migration' ),
+			'connected'      => __( 'connected', 'sh-clone-migration' ),
+			'reconnect'      => __( 'needs to be reconnected', 'sh-clone-migration' ),
+			'other_site'     => __( 'belongs to another copy of this site', 'sh-clone-migration' ),
+		);
+		return array(
+			'scheduled_backups' => array(
+				'label' => __( 'Scheduled backups', 'sh-clone-migration' ),
+				'value' => $summary['describe'] . ' (' . $summary['timezone'] . ')' . $next . $last,
+			),
+			'wp_cron'           => array(
+				'label' => __( 'WP-Cron', 'sh-clone-migration' ),
+				'value' => $summary['cron']['disabled']
+					? __( 'disabled (DISABLE_WP_CRON): run "wp shcm backup run" from a system cron job', 'sh-clone-migration' )
+					: ( $summary['cron']['loopback_blocked'] ? __( 'enabled, but loopback requests are blocked (backups advance once a minute)', 'sh-clone-migration' ) : __( 'enabled', 'sh-clone-migration' ) ),
+			),
+			'google_drive'      => array(
+				'label' => __( 'Google Drive', 'sh-clone-migration' ),
+				'value' => ( isset( $state[ $drive['state'] ] ) ? $state[ $drive['state'] ] : $drive['state'] ) . ( '' !== (string) $drive['account'] ? ' (' . $drive['account'] . ')' : '' ),
+			),
+		);
+	}
+
+	/**
+	 * Warnings about backups.
+	 *
+	 * @return array
+	 */
+	protected function backupWarnings() {
+		$summary = $this->backupSummary();
+		if ( null === $summary ) {
+			return array();
+		}
+		$warnings = array();
+		$config   = $summary['config'];
+		if ( ! empty( $summary['weak_keys'] ) ) {
+			$warnings[] = array(
+				'level'   => 'warning',
+				'message' => __( 'The security keys in wp-config.php are missing or still the sample values, so the Google Drive tokens and the backup password are sealed with keys kept in the database, which is inside every backup. Add real keys to wp-config.php (or define SHCM_SECRET_KEY), then reconnect Google Drive and enter the backup password again.', 'sh-clone-migration' ),
+			);
+		}
+		foreach ( isset( $summary['problems'] ) ? (array) $summary['problems'] : array() as $problem ) {
+			$warnings[] = array(
+				'level'   => 'error',
+				'message' => __( 'Scheduled backups:', 'sh-clone-migration' ) . ' ' . $problem,
+			);
+		}
+		if ( 'reconnect' === $summary['drive']['state'] ) {
+			$warnings[] = array(
+				'level'   => 'error',
+				'message' => __( 'Google Drive needs to be reconnected on the Scheduled Backups screen; backups are not being uploaded.', 'sh-clone-migration' ) . ( '' !== (string) $summary['drive']['error'] ? ' ' . $summary['drive']['error'] : '' ),
+			);
+		}
+		if ( ! $summary['identity_ok'] && 'manual' !== $config['frequency'] ) {
+			$warnings[] = array(
+				'level'   => 'warning',
+				'message' => __( 'Scheduled backups are paused: they were set up on another copy of this site. Confirm on the Scheduled Backups screen.', 'sh-clone-migration' ),
+			);
+		}
+		if ( ! empty( $summary['last'] ) && in_array( $summary['last']['status'], array( 'failed', 'partial' ), true ) ) {
+			$warnings[] = array(
+				'level'   => 'warning',
+				'message' => 'failed' === $summary['last']['status']
+					? __( 'The last backup failed. See the Scheduled Backups screen and its log.', 'sh-clone-migration' )
+					: __( 'The last backup was not uploaded to Google Drive. See the Scheduled Backups screen.', 'sh-clone-migration' ),
+			);
+		}
+		if ( $summary['overdue'] ) {
+			$warnings[] = array(
+				'level'   => 'warning',
+				'message' => __( 'A scheduled backup is overdue. WP-Cron runs only when the site has visitors; a system cron job running "wp shcm backup run" makes backups punctual.', 'sh-clone-migration' ),
+			);
+		}
+		if ( ! empty( $config['encrypt'] ) && ! $summary['has_password'] ) {
+			$warnings[] = array(
+				'level'   => 'error',
+				'message' => __( 'Encrypted backups are on, but the stored password cannot be read (wp-config.php changed?). Enter it again on the Scheduled Backups screen.', 'sh-clone-migration' ),
+			);
+		}
+		if ( 'manual' !== $config['frequency'] && $summary['cron']['disabled'] ) {
+			$warnings[] = array(
+				'level'   => 'info',
+				'message' => __( 'WP-Cron is disabled (DISABLE_WP_CRON). Scheduled backups need a system cron job that runs "wp shcm backup run" or wp-cron.php.', 'sh-clone-migration' ),
+			);
+		}
+		if ( ! empty( $config['gdrive'] ) && defined( 'WP_HTTP_BLOCK_EXTERNAL' ) && WP_HTTP_BLOCK_EXTERNAL ) {
+			$hosts = defined( 'WP_ACCESSIBLE_HOSTS' ) ? (string) WP_ACCESSIBLE_HOSTS : '';
+			if ( false === strpos( $hosts, 'googleapis.com' ) ) {
+				$warnings[] = array(
+					'level'   => 'error',
+					'message' => __( 'WP_HTTP_BLOCK_EXTERNAL blocks Google: add *.googleapis.com to WP_ACCESSIBLE_HOSTS, or backups cannot be uploaded to Google Drive.', 'sh-clone-migration' ),
+				);
+			}
+		}
 		return $warnings;
 	}
 

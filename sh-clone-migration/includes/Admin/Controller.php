@@ -93,6 +93,7 @@ class Controller {
 	 * @throws \RuntimeException When the archive is unusable.
 	 */
 	public function startImport( array $input ) {
+		$this->ensureNoBackupRunning();
 		$catalog = new Catalog( $this->plugin->storage() );
 		$name    = isset( $input['archive'] ) ? (string) $input['archive'] : '';
 		$path    = $catalog->resolve( $name );
@@ -168,6 +169,7 @@ class Controller {
 	 * @throws \RuntimeException When there is no rollback point to restore.
 	 */
 	public function startRollback( $job_id ) {
+		$this->ensureNoBackupRunning();
 		$source = $this->plugin->jobs()->load( $job_id );
 		if ( null === $source ) {
 			throw new \RuntimeException( __( 'That migration job no longer exists.', 'sh-clone-migration' ) );
@@ -226,6 +228,9 @@ class Controller {
 	 * @return array
 	 */
 	public function startReplace( array $input ) {
+		if ( empty( $input['dry_run'] ) ) {
+			$this->ensureNoBackupRunning();
+		}
 		$params = array(
 			'search'  => isset( $input['search'] ) ? (string) $input['search'] : '',
 			'replace' => isset( $input['replace'] ) ? (string) $input['replace'] : '',
@@ -262,9 +267,69 @@ class Controller {
 		}
 
 		$job->setRuntime( 'password', $password );
+		if ( $job->param( 'background' ) && \SHCM\Core\Plugin::backupsAvailable() ) {
+			return $this->snapshot( $this->lookIn( $job ) );
+		}
+		if ( Job::TYPE_IMPORT === $job->type() || ( Job::TYPE_REPLACE === $job->type() && ! $job->param( 'dry_run' ) ) ) {
+			// A backup started while this job sat abandoned: resuming now would
+			// change the site under it.
+			$this->ensureNoBackupRunning();
+		}
 		$job = $this->plugin->runner()->tick( $job );
 
 		return $this->snapshot( $job );
+	}
+
+	/**
+	 * Refuse to change the site while a backup is being made of it: the
+	 * archive would hold half of the old site and half of the new one, and
+	 * still count as a good backup.
+	 *
+	 * @return void
+	 * @throws \RuntimeException When a backup is running.
+	 */
+	protected function ensureNoBackupRunning() {
+		if ( ! Plugin::backupsAvailable() ) {
+			return;
+		}
+		$running = $this->plugin->backups()->buildingJob();
+		if ( null !== $running ) {
+			throw new \RuntimeException(
+				sprintf(
+					/* translators: %s: job id */
+					__( 'A backup is running (job %s). Wait for it to finish, or cancel it on the Scheduled Backups screen, then try again.', 'sh-clone-migration' ),
+					$running
+				)
+			);
+		}
+	}
+
+	/**
+	 * An open page polling a background job (a backup).
+	 *
+	 * The job drives itself through a chain of loopback requests; a page
+	 * that grabbed the job between two of them would break the chain and
+	 * leave the job without a driver once the tab closes. So the page only
+	 * steps in when the chain has stalled (the worker's rule) or cannot run
+	 * at all, and then advances the job through the background runner,
+	 * which starts the chain again.
+	 *
+	 * @param Job $job Job.
+	 * @return Job
+	 */
+	protected function lookIn( Job $job ) {
+		$dir       = $this->plugin->runner()->jobsDirectory();
+		$chainless = get_transient( \SHCM\Backup\BackgroundRunner::BLOCKED_TRANSIENT )
+			|| ! apply_filters( 'shcm_background_loopback', true, $job->id() ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals -- the plugin's own filter.
+		if ( $chainless ) {
+			$due = (int) $job->shared( 'resume_at', 0 ) <= time() && ! \SHCM\Jobs\JobLock::isLocked( $dir, $job->id() );
+		} else {
+			$due = \SHCM\Jobs\Scheduler::workerMayTick( $job, $dir, time() );
+		}
+		if ( ! $due ) {
+			return $job;
+		}
+		return $this->plugin->backups()->runner()->drive( $job );
 	}
 
 	/**
@@ -303,8 +368,15 @@ class Controller {
 	 *
 	 * @param string $job_id Job id.
 	 * @return array
+	 * @throws \RuntimeException When the job is a backup that is still running.
 	 */
 	public function deleteJob( $job_id ) {
+		$job = $this->plugin->jobs()->load( $job_id );
+		if ( null !== $job && $job->isRunnable() && $job->param( 'background' ) ) {
+			// Its next slice would write it back, or, between slices, the chain
+			// would stop with no failure recorded and the partial archive left.
+			throw new \RuntimeException( __( 'This backup is still running. Cancel it first.', 'sh-clone-migration' ) );
+		}
 		$this->plugin->jobs()->delete( $job_id );
 		return array( 'deleted' => true );
 	}
@@ -330,7 +402,9 @@ class Controller {
 	 */
 	public function resumable() {
 		foreach ( $this->plugin->jobs()->all( null, 10 ) as $job ) {
-			if ( $job->isRunnable() && Job::STATUS_PENDING !== $job->status() ) {
+			// Background backups are not "interrupted": they continue on
+			// their own and are shown on the Scheduled Backups screen.
+			if ( $job->isRunnable() && Job::STATUS_PENDING !== $job->status() && ! $job->param( 'background' ) ) {
 				return array( 'job' => $this->snapshot( $job ) );
 			}
 		}
@@ -358,6 +432,10 @@ class Controller {
 			);
 		}
 		$data['stage_list'] = $stages;
+		$data['background'] = (bool) $job->param( 'background' );
+		$data['busy']       = (bool) $job->runtime( 'busy', false );
+		$runner             = $this->plugin->runner();
+		$data['cancel_requested'] = method_exists( $runner, 'cancelRequested' ) && ! $job->isFinished() && $runner->cancelRequested( $job );
 
 		if ( $details ) {
 			$data['report'] = array(
@@ -375,6 +453,8 @@ class Controller {
 				'verify_mode'   => (string) $job->shared( 'verify_mode', '' ),
 				'verified'      => (bool) $job->shared( 'verified', false ),
 				'verified_entries' => (int) $job->shared( 'verified_entries', 0 ),
+				'remote_upload' => $job->shared( 'remote_upload', null ),
+				'backup'        => $job->param( 'backup', null ),
 				'size_visible'  => Job::TYPE_EXPORT === $job->type() ? false !== $this->plugin->environment()->downloadDelivery()['ok'] : true,
 				'manifest'      => $job->shared( 'manifest', null ),
 				'urls'          => $job->shared( 'url_report', null ),

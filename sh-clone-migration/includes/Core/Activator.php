@@ -41,6 +41,16 @@ class Activator {
 		}
 
 		ServerRules::install();
+
+		// Re-arm the backup schedule (it is kept in files, not in the cron
+		// option, so a reactivation or an update brings it back).
+		if ( Plugin::backupsAvailable() && function_exists( 'shcm_bootstrap' ) ) {
+			try {
+				shcm_bootstrap()->backups()->reconcile();
+			} catch ( \Throwable $e ) {
+				unset( $e ); // Activation must never fail because of the schedule.
+			}
+		}
 	}
 
 	/**
@@ -51,6 +61,8 @@ class Activator {
 	public static function deactivate() {
 		wp_clear_scheduled_hook( 'shcm_worker' );
 		wp_clear_scheduled_hook( 'shcm_cleanup' );
+		// The schedule itself stays in its file; reactivating re-arms it.
+		\SHCM\Backup\BackupManager::unscheduleAll();
 
 		// A migration must never leave the site behind a maintenance page.
 		\SHCM\Import\MaintenanceMode::disable();

@@ -64,7 +64,7 @@ class Notices {
 		}
 
 		foreach ( $this->plugin->jobs()->all( null, 5 ) as $job ) {
-			if ( ! $job->isRunnable() || Job::STATUS_PENDING === $job->status() ) {
+			if ( ! $job->isRunnable() || Job::STATUS_PENDING === $job->status() || $job->param( 'background' ) ) {
 				continue;
 			}
 			if ( time() - (int) $job->get( 'updated_at' ) < 60 ) {

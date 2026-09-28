@@ -105,6 +105,17 @@ class Storage {
 	}
 
 	/**
+	 * Configuration documents (backup schedule, Google Drive connection,
+	 * backup history). Kept here, not in the database, so that exports never
+	 * carry them and imports never replace them.
+	 *
+	 * @return string
+	 */
+	public function config() {
+		return $this->base . '/config';
+	}
+
+	/**
 	 * All managed sub directories.
 	 *
 	 * @return string[]
@@ -118,7 +129,45 @@ class Storage {
 			$this->logs(),
 			$this->incoming(),
 			$this->rollback(),
+			$this->config(),
 		);
+	}
+
+	/**
+	 * Create a directory with the permissions of its parent.
+	 *
+	 * WP-CLI and PHP often run as different system accounts (root or a
+	 * deploy user, and www-data). A subdirectory created by one of them with
+	 * a fixed 0755 would lock the other out; taking the parent's mode keeps
+	 * whatever the site owner set up for the storage directory.
+	 *
+	 * @param string $dir Directory.
+	 * @return bool Whether it exists now.
+	 */
+	public static function makeDirectory( $dir ) {
+		if ( is_dir( $dir ) ) {
+			return true;
+		}
+		if ( ! @mkdir( $dir, 0755, true ) && ! is_dir( $dir ) ) {
+			return false;
+		}
+		$parent = @fileperms( dirname( $dir ) );
+		if ( false !== $parent ) {
+			@chmod( $dir, ( $parent & 0777 ) | 0755 );
+		}
+		// WP-CLI run as root (a deploy script, the root crontab) would
+		// otherwise leave a directory PHP cannot write to.
+		if ( function_exists( 'posix_geteuid' ) && 0 === posix_geteuid() ) {
+			$owner = @fileowner( dirname( $dir ) );
+			$group = @filegroup( dirname( $dir ) );
+			if ( false !== $owner && 0 !== $owner ) {
+				@chown( $dir, $owner );
+			}
+			if ( false !== $group && 0 !== $group ) {
+				@chgrp( $dir, $group );
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -129,11 +178,14 @@ class Storage {
 	public function prepare() {
 		$ok = true;
 		foreach ( $this->directories() as $dir ) {
-			if ( ! is_dir( $dir ) && ! @mkdir( $dir, 0755, true ) && ! is_dir( $dir ) ) {
-				$ok = false;
+			// The backup settings directory is not needed for migrations: its
+			// problems are reported on the backup screens instead.
+			$needed = $dir !== $this->config();
+			if ( ! is_dir( $dir ) && ! self::makeDirectory( $dir ) ) {
+				$ok = $ok && ! $needed;
 				continue;
 			}
-			if ( ! is_writable( $dir ) ) {
+			if ( $needed && ! is_writable( $dir ) ) {
 				$ok = false;
 			}
 		}

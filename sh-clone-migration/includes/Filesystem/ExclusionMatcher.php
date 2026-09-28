@@ -14,7 +14,8 @@ defined( 'ABSPATH' ) || defined( 'SHCM_ALLOW_STANDALONE' ) || exit;
  *
  * Supported syntax:
  *   wp-content/cache      a directory or file, and everything below it
- *   /wp-content/cache     the same, anchored at the root
+ *   /wp-content/cache     the same (a leading slash is ignored; a pattern
+ *                         with an inner slash is anchored at the root anyway)
  *   *.log                 any file with that extension, at any depth
  *   * /node_modules       any directory with that name, at any depth
  *   uploads/2019/ *       everything below a directory

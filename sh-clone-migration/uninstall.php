@@ -18,6 +18,10 @@ $shcm_full     = is_array( $shcm_settings ) && ! empty( $shcm_settings['delete_d
 wp_clear_scheduled_hook( 'shcm_worker' );
 wp_clear_scheduled_hook( 'shcm_cleanup' );
 wp_clear_scheduled_hook( 'shcm_run_pending_compatibility' );
+// Backup events carry arguments (a job id), so clear them hook-wide.
+wp_unschedule_hook( 'shcm_scheduled_backup' );
+wp_unschedule_hook( 'shcm_background_resume' );
+delete_transient( 'shcm_loopback_blocked' );
 
 $shcm_maintenance = ABSPATH . '.maintenance';
 if ( file_exists( $shcm_maintenance ) ) {
@@ -41,6 +45,32 @@ foreach ( $shcm_htaccess_files as $shcm_htaccess ) {
 }
 delete_transient( 'shcm_delivery_probe' );
 delete_transient( 'shcm_htaccess_attempt' );
+
+$shcm_storage = WP_CONTENT_DIR . '/shcm-storage';
+
+// Give the Google Drive access back on every uninstall, not only a full one:
+// the grant is of no use without the plugin and its refresh token must not
+// outlive it (best effort; backups on Drive are left in place). The schedule
+// and the history stay unless everything is deleted below.
+if ( is_file( $shcm_storage . '/config/gdrive.php' ) && is_file( __DIR__ . '/includes/bootstrap.php' ) ) {
+	try {
+		require_once __DIR__ . '/includes/bootstrap.php';
+		if ( class_exists( '\SHCM\Remote\GoogleDrive\OAuth' ) ) {
+			$shcm_connection = new \SHCM\Remote\GoogleDrive\Connection( new \SHCM\Backup\ConfigStore( $shcm_storage . '/config' ), \SHCM\Security\SecretBox::fromWordPress() );
+			try {
+				( new \SHCM\Remote\GoogleDrive\OAuth( $shcm_connection, new \SHCM\Remote\Http\WordPressTransport(), \SHCM\Remote\GoogleDrive\Endpoints::resolve() ) )->revoke();
+			} catch ( \Throwable $shcm_error ) {
+				unset( $shcm_error ); // Offline: the tokens are removed below all the same.
+			}
+			// Tokens, account and folder go; the site's backup identity stays,
+			// so after a reinstall its earlier backups on Drive are found (and
+			// pruned) again.
+			$shcm_connection->disconnect();
+		}
+	} catch ( \Throwable $shcm_error ) {
+		unset( $shcm_error );
+	}
+}
 
 if ( ! $shcm_full ) {
 	return;
@@ -89,7 +119,6 @@ function shcm_uninstall_rmdir( $directory ) {
 	@rmdir( $directory );
 }
 
-$shcm_storage = WP_CONTENT_DIR . '/shcm-storage';
 if ( is_dir( $shcm_storage ) ) {
 	shcm_uninstall_rmdir( $shcm_storage );
 }

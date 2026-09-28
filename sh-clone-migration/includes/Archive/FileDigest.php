@@ -36,10 +36,14 @@ class FileDigest {
 	 * @param Budget    $budget    Budget.
 	 * @param bool|null $resumable Whether the hash context can be saved between
 	 *                             calls; null detects it (tests force false).
+	 * @param string    $algo      Hash algorithm: sha256 (default) or md5 (to
+	 *                             compare with a checksum Google Drive reports).
 	 * @return array State; 'digest' is set once the whole file is hashed.
 	 * @throws \RuntimeException When the file cannot be read or changes size.
 	 */
-	public static function advance( $path, array $state, Budget $budget, $resumable = null ) {
+	public static function advance( $path, array $state, Budget $budget, $resumable = null, $algo = 'sha256' ) {
+		$algo  = in_array( $algo, array( 'sha256', 'md5' ), true ) ? $algo : 'sha256';
+		$label = 'md5' === $algo ? 'MD5' : 'SHA-256';
 		clearstatcache( true, $path );
 		$size = (int) @filesize( $path );
 
@@ -52,7 +56,7 @@ class FileDigest {
 			);
 		}
 		if ( $size !== (int) $state['size'] ) {
-			throw new \RuntimeException( 'The archive changed size while its SHA-256 was being computed.' );
+			throw new \RuntimeException( sprintf( 'The archive changed size while its %s was being computed.', $label ) );
 		}
 
 		if ( null === $resumable ) {
@@ -67,7 +71,7 @@ class FileDigest {
 			// One shot. The attempt is counted in a file written before the
 			// call, not in the job state (which is saved only after it), so
 			// a host that kills the request part way is not retried forever.
-			$marker   = $path . '.sha256-attempt';
+			$marker   = $path . '.' . $algo . '-attempt';
 			$attempts = (int) @file_get_contents( $marker ) + 1;
 			if ( $attempts > 2 ) {
 				@unlink( $marker );
@@ -75,28 +79,28 @@ class FileDigest {
 				return $state;
 			}
 			@file_put_contents( $marker, (string) $attempts );
-			$digest = hash_file( 'sha256', $path );
+			$digest = hash_file( $algo, $path );
 			@unlink( $marker );
 			if ( false === $digest ) {
-				throw new \RuntimeException( 'The archive could not be read to compute its SHA-256.' );
+				throw new \RuntimeException( sprintf( 'The archive could not be read to compute its %s.', $label ) );
 			}
 			$state['digest'] = $digest;
 			$state['offset'] = $size;
 			return $state;
 		}
 
-		$context = '' === $state['context'] ? hash_init( 'sha256' ) : unserialize( base64_decode( $state['context'] ), array( 'allowed_classes' => array( 'HashContext' ) ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions
+		$context = '' === $state['context'] ? hash_init( $algo ) : unserialize( base64_decode( $state['context'] ), array( 'allowed_classes' => array( 'HashContext' ) ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions
 		if ( ! $context instanceof \HashContext ) {
-			throw new \RuntimeException( 'The saved SHA-256 state could not be restored.' );
+			throw new \RuntimeException( sprintf( 'The saved %s state could not be restored.', $label ) );
 		}
 
 		$handle = @fopen( $path, 'rb' );
 		if ( ! $handle ) {
-			throw new \RuntimeException( 'The archive could not be opened to compute its SHA-256.' );
+			throw new \RuntimeException( sprintf( 'The archive could not be opened to compute its %s.', $label ) );
 		}
 		if ( $state['offset'] > 0 && 0 !== fseek( $handle, (int) $state['offset'] ) ) {
 			fclose( $handle );
-			throw new \RuntimeException( 'The archive could not be read to compute its SHA-256.' );
+			throw new \RuntimeException( sprintf( 'The archive could not be read to compute its %s.', $label ) );
 		}
 
 		$slices = 0;
@@ -106,7 +110,7 @@ class FileDigest {
 			$read = hash_update_stream( $context, $handle, $want );
 			if ( $read <= 0 ) {
 				fclose( $handle );
-				throw new \RuntimeException( 'The archive could not be read to compute its SHA-256.' );
+				throw new \RuntimeException( sprintf( 'The archive could not be read to compute its %s.', $label ) );
 			}
 			$state['offset'] += $read;
 		}

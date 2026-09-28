@@ -10,6 +10,17 @@
 
 	var data = window.shcmData || {};
 	var strings = data.strings || {};
+	var U = strings.ui || {};
+
+	// Replace %s, %1$s and %2$s in a translated string.
+	function fmt( text ) {
+		var args = Array.prototype.slice.call( arguments, 1 );
+		var next = 0;
+		return String( text || '' ).replace( /%(?:(\d)\$)?s/g, function ( match, position ) {
+			var value = position ? args[ position - 1 ] : args[ next++ ];
+			return value === undefined ? '' : String( value );
+		} );
+	}
 
 	/* ---------------------------------------------------------------- utils */
 
@@ -172,7 +183,7 @@
 		var progress = Number( job.progress ) || 0;
 		this.bar.style.width = progress + '%';
 		this.label.textContent = progress.toFixed( 1 ) + '%';
-		this.message.textContent = job.message || '';
+		this.message.textContent = job.cancel_requested && strings.cancelling ? strings.cancelling : ( job.message || '' );
 
 		if ( job.status === 'completed' ) {
 			this.bar.parentNode.classList.add( 'shcm-bar--done' );
@@ -233,25 +244,25 @@
 		if ( job.type === 'export' && report.database_included !== null && report.database_included !== undefined ) {
 			// Always shown for an export, zero included: a missing database
 			// must be visible, not silently absent from the list.
-			facts.push( [ 'Tables', report.database_included === false ? 'not included' : formatNumber( report.tables ), ! report.database_included || ! report.tables ] );
+			facts.push( [ U.tables, report.database_included === false ? U.notIncluded : formatNumber( report.tables ), ! report.database_included || ! report.tables ] );
 		} else if ( report.tables ) {
-			facts.push( [ 'Tables', formatNumber( report.tables ) ] );
+			facts.push( [ U.tables, formatNumber( report.tables ) ] );
 		}
 		if ( report.database && report.database.rows ) {
-			facts.push( [ 'Rows', formatNumber( report.database.rows ) ] );
+			facts.push( [ U.rows, formatNumber( report.database.rows ) ] );
 		}
 		if ( report.file_totals && report.file_totals.files ) {
-			facts.push( [ 'Files', formatNumber( report.file_totals.files ) ] );
-			facts.push( [ 'Source size', formatBytes( report.file_totals.bytes ) ] );
+			facts.push( [ U.files, formatNumber( report.file_totals.files ) ] );
+			facts.push( [ U.sourceSize, formatBytes( report.file_totals.bytes ) ] );
 		}
 		if ( report.file_totals && report.file_totals.skipped ) {
-			facts.push( [ 'Skipped', formatNumber( report.file_totals.skipped ), true ] );
+			facts.push( [ U.skipped, formatNumber( report.file_totals.skipped ), true ] );
 		}
 		if ( report.archive_size ) {
-			facts.push( [ 'Archive', formatBytes( report.archive_size ) + ' (' + formatNumber( report.archive_size ) + ' bytes)' ] );
+			facts.push( [ U.archive, fmt( U.sizeWithBytes, formatBytes( report.archive_size ), formatNumber( report.archive_size ) ) ] );
 		}
 		if ( report.urls && report.urls.stats ) {
-			facts.push( [ 'Values updated', formatNumber( report.urls.stats.values_changed ) ] );
+			facts.push( [ U.valuesUpdated, formatNumber( report.urls.stats.values_changed ) ] );
 		}
 
 		this.facts.innerHTML = facts.map( function ( fact ) {
@@ -317,10 +328,15 @@
 		this.jobId = null;
 		this.token = '';
 		this.stopped = false;
+		// Each polling loop carries the generation it was started in; a loop
+		// from an older generation (superseded by cancel() or a restart) ends
+		// quietly instead of polling alongside the new one.
+		this.generation = 0;
 	}
 
 	JobRunner.prototype.start = function ( action, payload, password ) {
 		var self = this;
+		var generation = ++this.generation;
 		this.password = password || '';
 		this.stopped = false;
 		this.view.show();
@@ -331,7 +347,7 @@
 				// The token authorises finishing this job even after a restore
 				// has replaced the user account this session belongs to.
 				self.token = job.token || '';
-				return self.loop( job );
+				return self.loop( job, generation );
 			} )
 			.catch( function ( error ) {
 				self.fail( error );
@@ -340,6 +356,7 @@
 
 	JobRunner.prototype.resume = function ( jobId, password ) {
 		var self = this;
+		var generation = ++this.generation;
 		this.jobId = jobId;
 		this.password = password || '';
 		this.stopped = false;
@@ -347,15 +364,18 @@
 
 		return tick( jobId, this.password, this.options.useEndpoint, this.token )
 			.then( function ( job ) {
-				return self.loop( job );
+				return self.loop( job, generation );
 			} )
 			.catch( function ( error ) {
 				self.fail( error );
 			} );
 	};
 
-	JobRunner.prototype.loop = function ( job ) {
+	JobRunner.prototype.loop = function ( job, generation ) {
 		var self = this;
+		if ( generation !== this.generation ) {
+			return job;
+		}
 		this.view.render( job );
 
 		if ( this.stopped ) {
@@ -369,15 +389,23 @@
 			return job;
 		}
 
-		return sleep( 250 )
+		// A background job (a backup) is also driven by the server itself;
+		// the page only needs to look in now and then, and takes over when
+		// loopback requests do not get through.
+		return sleep( job.background ? 2000 : 250 )
 			.then( function () {
+				if ( generation !== self.generation ) {
+					return null;
+				}
 				return tick( self.jobId, self.password, self.options.useEndpoint, self.token );
 			} )
 			.then( function ( next ) {
-				return self.loop( next );
+				return next ? self.loop( next, generation ) : job;
 			} )
 			.catch( function ( error ) {
-				self.fail( error );
+				if ( generation === self.generation ) {
+					self.fail( error );
+				}
 			} );
 	};
 
@@ -387,8 +415,20 @@
 			return Promise.resolve();
 		}
 		this.stopped = true;
+		// Supersede the running loop: exactly one loop follows the job from
+		// here, whatever the server answers.
+		var generation = ++this.generation;
 		return api( 'cancel', { job_id: this.jobId, job_token: this.token } ).then( function ( job ) {
+			if ( generation !== self.generation ) {
+				return;
+			}
 			self.view.render( job );
+			if ( job.status !== 'cancelled' && job.status !== 'completed' && job.status !== 'failed' ) {
+				// Another request is working on the job; it stops at its next
+				// checkpoint. Keep watching until it has.
+				self.stopped = false;
+				return self.loop( job, generation );
+			}
 			if ( self.options.onFinish ) {
 				self.options.onFinish( job );
 			}
@@ -477,10 +517,9 @@
 		}
 		var total = Number( job.warnings_total ) || job.warnings.length;
 		var note = total > job.warnings.length
-			? '<p class="description">Showing the last ' + formatNumber( job.warnings.length ) + ' of ' + formatNumber( total ) +
-				' warnings. The migration log lists every one of them.</p>'
+			? '<p class="description">' + escapeHtml( fmt( U.warningsShown, formatNumber( job.warnings.length ), formatNumber( total ) ) ) + '</p>'
 			: '';
-		return '<h3>Warnings (' + formatNumber( total ) + ')</h3>' + note + '<ul class="ul-disc">' + job.warnings.map( function ( warning ) {
+		return '<h3>' + escapeHtml( fmt( U.warningsTitle, formatNumber( total ) ) ) + '</h3>' + note + '<ul class="ul-disc">' + job.warnings.map( function ( warning ) {
 			return '<li>' + escapeHtml( warning.message ) + '</li>';
 		} ).join( '' ) + '</ul>';
 	}
@@ -495,7 +534,7 @@
 		var rows = [];
 		var name = report.archive || '';
 
-		rows.push( [ 'Archive size', formatBytes( report.archive_size ) + ' &mdash; exactly <strong>' + formatNumber( report.archive_size ) + ' bytes</strong>' ] );
+		rows.push( [ escapeHtml( U.archiveSize ), formatBytes( report.archive_size ) + ' &mdash; <strong>' + escapeHtml( fmt( U.exactlyBytes, formatNumber( report.archive_size ) ) ) + '</strong>' ] );
 
 		if ( report.sha256 ) {
 			rows.push( [ 'SHA-256', '<code class="shcm-hash">' + escapeHtml( report.sha256 ) + '</code>' ] );
@@ -503,12 +542,12 @@
 
 		var db = report.database || {};
 		if ( report.database_included === false || ! db.included ) {
-			rows.push( [ 'Database', '<span class="shcm-text-danger">NOT included in this archive</span>' ] );
+			rows.push( [ escapeHtml( U.database ), '<span class="shcm-text-danger">' + escapeHtml( U.dbNotIncluded ) + '</span>' ] );
 		} else if ( ! db.tables ) {
-			rows.push( [ 'Database', '<span class="shcm-text-danger">No tables were exported</span>' ] );
+			rows.push( [ escapeHtml( U.database ), '<span class="shcm-text-danger">' + escapeHtml( U.dbNoTables ) + '</span>' ] );
 		} else {
-			rows.push( [ 'Database', 'Included &mdash; <strong>' + formatNumber( db.tables ) + ' tables, ' + formatNumber( db.rows ) + ' rows</strong>, ' +
-				formatBytes( db.sql_bytes ) + ' of SQL (table prefix <code>' + escapeHtml( db.prefix || '' ) + '</code>)' ] );
+			rows.push( [ escapeHtml( U.database ), escapeHtml( U.dbIncluded ) + ' &mdash; <strong>' + escapeHtml( fmt( U.dbCounts, formatNumber( db.tables ), formatNumber( db.rows ) ) ) + '</strong>, ' +
+				escapeHtml( fmt( U.dbSql, formatBytes( db.sql_bytes ) ) ) + ' (' + escapeHtml( U.tablePrefix ) + ' <code>' + escapeHtml( db.prefix || '' ) + '</code>)' ] );
 		}
 
 		var groups = report.entry_groups || {};
@@ -530,32 +569,29 @@
 		// while copying (vanished, unreadable or still changing).
 		var skipped = ( report.files_exported && report.files_exported.skipped ? Number( report.files_exported.skipped ) : 0 ) +
 			( report.file_totals && report.file_totals.skipped ? Number( report.file_totals.skipped ) : 0 );
-		rows.push( [ 'Files', '<strong>' + formatNumber( files ) + '</strong>' + ( parts.length ? ': ' + parts.join( ', ' ) : '' ) +
-			( skipped ? ' &mdash; <span class="shcm-text-danger">' + formatNumber( skipped ) + ' skipped (see the warnings and the log)</span>' : '' ) ] );
+		rows.push( [ escapeHtml( U.files ), '<strong>' + formatNumber( files ) + '</strong>' + ( parts.length ? ': ' + parts.join( ', ' ) : '' ) +
+			( skipped ? ' &mdash; <span class="shcm-text-danger">' + escapeHtml( fmt( U.skippedSeeLog, formatNumber( skipped ) ) ) + '</span>' : '' ) ] );
 
 		if ( report.verify_mode === 'full' ) {
-			rows.push( [ 'Verification', 'The archive was read back and every one of its ' + formatNumber( report.verified_entries ) + ' entries matched its checksum.' ] );
+			rows.push( [ escapeHtml( U.verification ), escapeHtml( fmt( U.verifiedFull, formatNumber( report.verified_entries ) ) ) ] );
 		} else if ( report.verify_mode === 'quick' ) {
-			rows.push( [ 'Verification', 'Structure check only (quick mode in the settings); entry checksums were not read back.' ] );
+			rows.push( [ escapeHtml( U.verification ), escapeHtml( U.verifiedQuick ) ] );
 		}
 
 		var html = '<table class="widefat shcm-summary"><tbody>' + rows.map( function ( row ) {
 			return '<tr><th scope="row">' + row[ 0 ] + '</th><td>' + row[ 1 ] + '</td></tr>';
 		} ).join( '' ) + '</tbody></table>';
 
-		html += '<details class="shcm-verify-help"><summary>How to check the downloaded file</summary>' +
-			'<p>The downloaded file must be exactly <strong>' + formatNumber( report.archive_size ) + ' bytes</strong>' +
-			( report.sha256 ? ' and its SHA-256 must be the one shown above' : '' ) + '. To compute it:</p>' +
+		html += '<details class="shcm-verify-help"><summary>' + escapeHtml( U.howToCheck ) + '</summary>' +
+			'<p>' + escapeHtml( fmt( report.sha256 ? U.checkSizeAndHash : U.checkSize, formatNumber( report.archive_size ) ) ) + '</p>' +
 			'<p>Windows (PowerShell): <code>Get-FileHash .\\' + escapeHtml( name ) + ' -Algorithm SHA256</code><br>' +
 			'macOS: <code>shasum -a 256 ' + escapeHtml( name ) + '</code><br>' +
 			'Linux: <code>sha256sum ' + escapeHtml( name ) + '</code></p>' +
-			'<p>The import checks every entry again before it changes anything, so a damaged copy is always refused.</p>' +
+			'<p>' + escapeHtml( U.importChecks ) + '</p>' +
 			'</details>';
 
 		if ( report.size_visible === false ) {
-			html += '<div class="shcm-alert shcm-alert--warning">This server may hide the file size from browsers and download managers ' +
-				'(they then say the size is unknown and cannot resume). The download is still complete when its size and SHA-256 match. ' +
-				'See <em>System status</em> for the one-time server rule that fixes this.</div>';
+			html += '<div class="shcm-alert shcm-alert--warning">' + escapeHtml( U.sizeHidden ) + '</div>';
 		}
 
 		return html;
@@ -1030,6 +1066,22 @@
 
 				if ( button.getAttribute( 'data-action' ) === 'verify' ) {
 					verifyArchive( archive, row, button );
+					return;
+				}
+
+				if ( button.getAttribute( 'data-action' ) === 'gdrive' ) {
+					if ( ! window.confirm( strings.confirmSendDrive ) ) {
+						return;
+					}
+					button.disabled = true;
+					// The upload runs in the background; the Scheduled Backups
+					// screen picks the running job up and shows its progress.
+					api( 'backup_upload', { archive: archive } ).then( function () {
+						window.location.href = strings.schedulesUrl;
+					} ).catch( function ( error ) {
+						button.disabled = false;
+						window.alert( error.message );
+					} );
 				}
 			} );
 		}
@@ -1039,6 +1091,8 @@
 				var row = button.closest( 'tr' );
 				api( 'delete_job', { job_id: row.getAttribute( 'data-job' ) } ).then( function () {
 					row.remove();
+				} ).catch( function ( error ) {
+					window.alert( error.message );
 				} );
 			} );
 		} );
@@ -1234,11 +1288,526 @@
 
 	/* ----------------------------------------------------------------- boot */
 
+	/* ----------------------------------------------------- scheduled backups */
+
+	function initSchedules() {
+		var form = $( '#shcm-schedule-form' );
+		var dataNode = $( '#shcm-schedule-data' );
+		if ( ! form || ! dataNode ) {
+			return;
+		}
+
+		var L = strings.sched || {};
+		var status = {};
+		try {
+			status = JSON.parse( dataNode.textContent );
+		} catch ( e ) {
+			status = {};
+		}
+
+		var runner = new JobRunner( {
+			view: new ProgressView( $( '#shcm-progress-panel' ) ),
+			onFinish: function ( job ) {
+				showResult( renderBackupResult( job ), job.status === 'completed' ? 'ok' : 'error' );
+				$( '#shcm-backup-now' ).disabled = false;
+				refresh();
+			},
+			onError: function ( error ) {
+				showResult( '<div class="shcm-alert shcm-alert--error">' + escapeHtml( error.message ) + '</div>', 'error' );
+				$( '#shcm-backup-now' ).disabled = false;
+				refresh();
+			}
+		} );
+
+		function refresh() {
+			return api( 'backup_status', {} ).then( function ( next ) {
+				status = next;
+				render();
+			} ).catch( function () {} );
+		}
+
+		function feedback( node, message, isError ) {
+			if ( ! node ) {
+				return;
+			}
+			node.className = 'shcm-save-feedback' + ( isError ? ' is-error' : '' );
+			node.textContent = message;
+		}
+
+		function tag( text, tone ) {
+			return '<span class="shcm-tag' + ( tone ? ' shcm-tag--' + tone : '' ) + '">' + escapeHtml( text ) + '</span>';
+		}
+
+		function alertBox( level, html, action ) {
+			return '<div class="shcm-alert shcm-alert--' + level + '">' + html +
+				( action ? ' ' + action : '' ) + '</div>';
+		}
+
+		/* ---- rendering ---- */
+
+		function render() {
+			var schedule = status.schedule || {};
+			var drive = status.drive || {};
+			renderStats( schedule, drive );
+			renderAlerts( schedule, drive );
+			renderDrive( drive );
+			renderHistory( status.history || [] );
+			syncForm();
+		}
+
+		function renderStats( schedule, drive ) {
+			// Counted by the server over the whole history, not just the rows
+			// the table shows.
+			var totals = status.totals || { local: 0, local_bytes: 0, remote: 0 };
+			var last = schedule.last;
+			var next;
+			var nextLabel = schedule.describe || '';
+			if ( ! schedule.identity_ok ) {
+				next = L.paused;
+			} else if ( ( schedule.config || {} ).frequency === 'manual' ) {
+				next = L.onDemand;
+			} else if ( status.next_in ) {
+				next = status.next_soon ? L.anyMoment : fmt( L.nextIn, status.next_in );
+				nextLabel = fmt( L.nextLabel, schedule.describe || '', status.next_when || '' );
+			} else {
+				next = '—';
+			}
+			var lastText = '—';
+			if ( last ) {
+				lastText = ( { success: L.statusOk, partial: L.statusPartial, failed: L.statusFailed, skipped: L.statusSkipped, cancelled: L.statusCancelled }[ last.status ] || last.status );
+			}
+			var tiles = [
+				[ next, nextLabel ],
+				[ lastText, last ? L.lastBackup : L.noBackupYet, last && ( last.status === 'failed' || last.status === 'partial' ) ],
+				[ formatNumber( totals.local ) + ' · ' + formatBytes( totals.local_bytes ), L.keptHere ],
+				[ drive.state === 'connected' ? fmt( L.onDrive, formatNumber( totals.remote ) ) : ( drive.state === 'reconnect' ? L.reconnectShort : L.notConnected ), L.googleDrive, drive.state === 'reconnect' ]
+			];
+			$( '#shcm-schedule-stats' ).innerHTML = tiles.map( function ( tile ) {
+				return '<div class="shcm-stat' + ( tile[ 2 ] ? ' shcm-stat--warn' : '' ) + '">' +
+					'<span class="shcm-stat__value">' + escapeHtml( tile[ 0 ] ) + '</span>' +
+					'<span class="shcm-stat__label">' + escapeHtml( tile[ 1 ] ) + '</span></div>';
+			} ).join( '' );
+		}
+
+		function renderAlerts( schedule, drive ) {
+			var config = schedule.config || {};
+			var cron = schedule.cron || {};
+			var html = '';
+			( schedule.problems || [] ).forEach( function ( problem ) {
+				html += alertBox( 'error', escapeHtml( problem ) );
+			} );
+			if ( schedule.weak_keys && ( config.encrypt || drive.state === 'connected' ) ) {
+				html += alertBox( 'warning', escapeHtml( L.weakKeys ) );
+			}
+			if ( ! schedule.main_site ) {
+				html += alertBox( 'info', escapeHtml( L.networkOnly ) );
+			}
+			if ( ! schedule.identity_ok ) {
+				html += alertBox( 'warning', '<strong>' + escapeHtml( L.identityTitle ) + '</strong> ' + escapeHtml( L.identityBody ),
+					'<button type="button" class="button button-small" data-action="adopt">' + escapeHtml( L.adoptResume ) + '</button>' );
+			}
+			if ( drive.state === 'reconnect' ) {
+				html += alertBox( 'error', '<strong>' + escapeHtml( L.reconnectTitle ) + '</strong> ' + escapeHtml( drive.error || '' ),
+					'<button type="button" class="button button-small" data-action="connect">' + escapeHtml( L.reconnectShort ) + '</button>' );
+			} else if ( drive.state === 'other_site' ) {
+				html += alertBox( 'warning', escapeHtml( L.driveOtherSite ),
+					'<button type="button" class="button button-small" data-action="adopt">' + escapeHtml( L.adoptShort ) + '</button>' );
+			} else if ( config.gdrive && drive.state !== 'connected' ) {
+				html += alertBox( 'warning', escapeHtml( L.driveNotConnected ) );
+			}
+			if ( config.encrypt && ! schedule.has_password ) {
+				html += alertBox( 'error', escapeHtml( L.noPassword ) );
+			}
+			if ( schedule.overdue ) {
+				html += alertBox( 'warning', escapeHtml( L.overdue ) );
+			}
+			if ( cron.disabled ) {
+				html += alertBox( 'info', fmt( escapeHtml( L.cronDisabled ), '<code>wp shcm backup run</code>' ) );
+			}
+			if ( cron.loopback_blocked ) {
+				html += alertBox( 'warning', escapeHtml( L.loopbackBlocked ) );
+			}
+			$( '#shcm-schedule-alerts' ).innerHTML = html;
+		}
+
+		function renderDrive( drive ) {
+			var box = $( '#shcm-gdrive-status' );
+			var actions = $( '#shcm-gdrive-actions' );
+			var setup = $( '#shcm-gdrive-setup' );
+			var html = '';
+			var buttons = '';
+			if ( drive.state === 'connected' ) {
+				html = '<table class="widefat shcm-summary"><tbody>' +
+					'<tr><th scope="row">' + escapeHtml( L.account ) + '</th><td>' + escapeHtml( drive.account || '—' ) + '</td></tr>' +
+					'<tr><th scope="row">' + escapeHtml( L.folder ) + '</th><td>' + escapeHtml( drive.folder || L.folderLater ) + '</td></tr>' +
+					( drive.quota ? '<tr><th scope="row">' + escapeHtml( L.storage ) + '</th><td>' + escapeHtml( drive.quota.limit ? fmt( L.usedOf, formatBytes( drive.quota.usage ), formatBytes( drive.quota.limit ) ) : fmt( L.used, formatBytes( drive.quota.usage ) ) ) + '</td></tr>' : '' ) +
+					'</tbody></table>';
+				buttons = '<button type="button" class="button" data-action="test">' + escapeHtml( L.testConnection ) + '</button>' +
+					'<button type="button" class="button" data-action="list">' + escapeHtml( L.showOnDrive ) + '</button>' +
+					'<button type="button" class="button button-link-delete" data-action="disconnect">' + escapeHtml( L.disconnect ) + '</button>';
+				setup.classList.add( 'shcm-hidden' );
+			} else {
+				if ( drive.state === 'reconnect' ) {
+					html = alertBox( 'error', escapeHtml( drive.error || L.connectionStopped ) );
+				} else if ( drive.state === 'other_site' ) {
+					html = alertBox( 'warning', escapeHtml( L.connectedElsewhere ) );
+				} else {
+					html = '<p>' + escapeHtml( L.notConnectedLong ) + '</p>';
+				}
+				if ( drive.state === 'reconnect' || drive.state === 'other_site' ) {
+					buttons = '<button type="button" class="button button-link-delete" data-action="disconnect">' + escapeHtml( L.disconnect ) + '</button>';
+				}
+				setup.classList.remove( 'shcm-hidden' );
+			}
+			box.innerHTML = html + '<p class="shcm-save-feedback" id="shcm-gdrive-message" role="status"></p>';
+			actions.innerHTML = buttons;
+			var connect = $( '#shcm-gdrive-connect' );
+			if ( connect ) {
+				connect.textContent = drive.state === 'reconnect' || drive.state === 'other_site' ? L.reconnectDrive : L.connectDrive;
+			}
+		}
+
+		function statusPill( row ) {
+			var map = { success: [ 'completed', L.statusOk ], partial: [ 'partial', L.statusPartial ], failed: [ 'failed', L.statusFailed ], running: [ 'running', L.statusRunning ], skipped: [ 'cancelled', L.statusSkipped ], cancelled: [ 'cancelled', L.statusCancelled ] };
+			var entry = map[ row.status ] || [ 'pending', row.status || '?' ];
+			return '<span class="shcm-status shcm-status--' + entry[ 0 ] + '">' + escapeHtml( entry[ 1 ] ) + '</span>';
+		}
+
+		function driveCell( row ) {
+			var remote = row.remote || {};
+			switch ( remote.status ) {
+				case 'uploaded':
+					return tag( L.uploaded, 'ok' ) + ( remote.link ? ' <a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml( L.open ) + '</a>' : '' );
+				case 'pending':
+					return tag( L.uploadingTag );
+				case 'deleted':
+					return tag( L.removedRetention );
+				case 'failed':
+					return tag( L.statusFailed, 'danger' ) + ( remote.error ? '<br><span class="description">' + escapeHtml( remote.error ) + '</span>' : '' ) +
+						( row.present ? '<br><button type="button" class="button button-small" data-action="retry" data-history="' + escapeHtml( row.id ) + '">' + escapeHtml( L.retryUpload ) + '</button>' : '' );
+				case 'off':
+				case undefined:
+					return '—';
+				default:
+					return escapeHtml( remote.status );
+			}
+		}
+
+		function renderHistory( rows ) {
+			var box = $( '#shcm-schedule-history' );
+			if ( ! rows.length ) {
+				box.innerHTML = '<p class="shcm-empty">' + escapeHtml( L.noHistory ) + '</p>';
+				return;
+			}
+			var labels = { schedule: L.triggerSchedule, manual: L.triggerManual, cli: L.triggerCli };
+			var contents = { full: L.contentsFull, database: L.contentsDatabase, files: L.contentsFiles };
+			box.innerHTML = '<div class="shcm-table-scroll"><table class="widefat striped shcm-table" id="shcm-schedule-history-table"><thead><tr>' +
+				[ L.colDate, L.colStartedBy, L.colStatus, L.colContents, L.colSize, L.colServer, L.colDrive, '' ].map( function ( label ) {
+					return '<th>' + escapeHtml( label ) + '</th>';
+				} ).join( '' ) +
+				'</tr></thead><tbody>' + rows.map( function ( row ) {
+					var local = row.present
+						? tag( L.kept, 'ok' ) + ( row.download ? ' <a href="' + escapeHtml( row.download.replace( /&amp;/g, '&' ) ) + '">' + escapeHtml( L.download ) + '</a>' : '' )
+						: ( row.status === 'success' || row.status === 'partial' ? tag( L.removedRetention ) : '—' );
+					return '<tr data-job="' + escapeHtml( row.id ) + '">' +
+						'<td>' + escapeHtml( row.date ) + '</td>' +
+						'<td>' + escapeHtml( labels[ row.trigger ] || row.trigger || '' ) + '</td>' +
+						'<td>' + statusPill( row ) + ( row.error && row.status !== 'partial' ? '<br><span class="description">' + escapeHtml( row.error ) + '</span>' : '' ) +
+						( row.warnings ? '<br><span class="description">' + escapeHtml( fmt( row.warnings === 1 ? L.warningOne : L.warningMany, formatNumber( row.warnings ) ) ) + '</span>' : '' ) + '</td>' +
+						'<td>' + escapeHtml( contents[ row.contents ] || row.contents || '' ) + ( row.encrypted ? ' ' + tag( L.encrypted, 'lock' ) : '' ) + '</td>' +
+						'<td>' + ( row.size ? formatBytes( row.size ) : '—' ) + '</td>' +
+						'<td>' + local + '</td>' +
+						'<td>' + driveCell( row ) + '</td>' +
+						'<td class="shcm-actions">' + ( row.job ? '<a class="button button-small" href="' + escapeHtml( data.logUrl.replace( /&amp;/g, '&' ) + '&job_id=' + encodeURIComponent( row.job ) ) + '">' + escapeHtml( L.log ) + '</a>' : '' ) + '</td>' +
+						'</tr>';
+				} ).join( '' ) + '</tbody></table></div>';
+		}
+
+		// The server changes some settings by itself (Disconnect switches Drive
+		// off and keeps at least one backup here): show what is stored.
+		function loadServerSettings() {
+			var config = ( status.schedule || {} ).config || {};
+			var toggle = $( '#shcm-gdrive-toggle' );
+			var keep = $( '#shcm-keep-local' );
+			if ( toggle && typeof config.gdrive !== 'undefined' ) {
+				toggle.checked = !! config.gdrive;
+			}
+			if ( keep && typeof config.keep_local !== 'undefined' ) {
+				keep.value = config.keep_local;
+			}
+			var nowDrive = $( '#shcm-backup-now-drive' );
+			if ( nowDrive ) {
+				nowDrive.checked = !! config.gdrive && ( status.drive || {} ).state === 'connected';
+			}
+		}
+
+		function syncForm() {
+			var frequency = $( '#shcm-frequency' ).value;
+			$$( '.shcm-when', form ).forEach( function ( node ) {
+				var show = ( node.getAttribute( 'data-show-for' ) || '' ).split( ' ' ).indexOf( frequency ) !== -1;
+				node.classList.toggle( 'shcm-hidden', ! show );
+			} );
+			var gdrive = $( '#shcm-gdrive-toggle' ).checked;
+			$$( '.shcm-gdrive-only', form ).forEach( function ( node ) {
+				node.classList.toggle( 'shcm-hidden', ! gdrive );
+			} );
+			var encrypt = $( '#shcm-encrypt-toggle' );
+			$$( '.shcm-encrypt-only', form ).forEach( function ( node ) {
+				node.classList.toggle( 'shcm-hidden', ! ( encrypt && encrypt.checked ) );
+			} );
+			var driveOk = ( status.drive || {} ).state === 'connected';
+			var nowDrive = $( '#shcm-backup-now-drive' );
+			nowDrive.disabled = ! driveOk;
+			$( '#shcm-backup-now-drive-label' ).classList.toggle( 'shcm-muted', ! driveOk );
+			if ( ! driveOk ) {
+				nowDrive.checked = false;
+			}
+		}
+
+		function renderBackupResult( job ) {
+			var report = job.report || {};
+			var remote = report.remote_upload || null;
+			var uploadOnly = !! ( job.params && job.params.upload_only );
+			var html = '';
+			if ( job.status === 'completed' && uploadOnly ) {
+				html += '<div class="shcm-alert shcm-alert--success"><strong>' + escapeHtml( strings.uploadDone ) + '.</strong>' +
+					( remote && remote.link ? ' <a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml( L.openInDrive ) + '</a>' : '' ) + '</div>';
+				return html + renderWarnings( job );
+			}
+			if ( job.status !== 'completed' && job.status !== 'cancelled' && uploadOnly ) {
+				html += '<div class="shcm-alert shcm-alert--error"><strong>' + escapeHtml( L.uploadFailed ) + ':</strong> ' +
+					escapeHtml( job.error && job.error.message ? job.error.message : '' ) + '</div>';
+				return html + renderWarnings( job );
+			}
+			if ( job.status === 'completed' ) {
+				if ( report.backup && report.backup.gdrive && ( ! remote || remote.status !== 'uploaded' ) ) {
+					html += '<div class="shcm-alert shcm-alert--warning"><strong>' + escapeHtml( strings.backupPartial || '' ) + '.</strong> ' +
+						escapeHtml( remote && remote.error ? remote.error : '' ) + '</div>';
+				} else {
+					html += '<div class="shcm-alert shcm-alert--success"><strong>' +
+						escapeHtml( report.archive ? strings.backupDone : strings.uploadDone ) + '.</strong>' +
+						( remote && remote.status === 'uploaded' ? ' ' + escapeHtml( L.uploadedVerified ) + ( remote.link ? ' <a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml( L.openInDrive ) + '</a>' : '' ) : '' ) +
+						'</div>';
+				}
+				if ( report.archive_size ) {
+					html += renderArchiveSummary( job );
+				}
+			} else if ( job.status === 'cancelled' ) {
+				html += '<div class="shcm-alert shcm-alert--warning">' + escapeHtml( L.cancelled ) + '</div>';
+			} else {
+				html += '<div class="shcm-alert shcm-alert--error"><strong>' + escapeHtml( strings.backupFailed || '' ) + ':</strong> ' +
+					escapeHtml( job.error && job.error.message ? job.error.message : '' ) + '</div>';
+			}
+			return html + renderWarnings( job );
+		}
+
+		/* ---- actions ---- */
+
+		function collectSchedule() {
+			var payload = {};
+			$$( 'input, select, textarea', form ).forEach( function ( field ) {
+				if ( ! field.name ) {
+					return;
+				}
+				payload[ field.name ] = field.type === 'checkbox' ? field.checked : field.value;
+			} );
+			return payload;
+		}
+
+		form.addEventListener( 'change', syncForm );
+		form.addEventListener( 'submit', function ( event ) {
+			event.preventDefault();
+			var node = $( '#shcm-schedule-feedback' );
+			var request = { schedule: collectSchedule() };
+			var password = $( '#shcm-backup-password' );
+			var confirm = $( '#shcm-backup-password-confirm' );
+			if ( password && password.value !== '' ) {
+				if ( password.value !== confirm.value ) {
+					feedback( node, strings.passwordMismatch, true );
+					return;
+				}
+				request.set_password = true;
+				request.password = password.value;
+			}
+			feedback( node, '…' );
+			api( 'save_schedule', request ).then( function ( next ) {
+				status = next;
+				if ( password ) {
+					password.value = '';
+					confirm.value = '';
+				}
+				loadServerSettings();
+				render();
+				feedback( node, strings.saved + ( status.next_text ? ' ' + fmt( L.nextBackup, status.next_text ) : '' ) );
+			} ).catch( function ( error ) {
+				feedback( node, error.message, true );
+			} );
+		} );
+
+		$( '#shcm-backup-now' ).addEventListener( 'click', function () {
+			this.disabled = true;
+			$( '#shcm-result-panel' ).classList.add( 'shcm-hidden' );
+			runner.start( 'start_backup', { gdrive: $( '#shcm-backup-now-drive' ).checked } );
+		} );
+
+		$( '#shcm-cancel-job' ).addEventListener( 'click', function () {
+			if ( window.confirm( L.confirmCancel ) ) {
+				runner.cancel();
+			}
+		} );
+
+		function connect() {
+			var node = $( '#shcm-gdrive-feedback' );
+			feedback( node, '…' );
+			return api( 'gdrive_connect', {} ).then( function ( result ) {
+				window.location.href = result.url;
+			} ).catch( function ( error ) {
+				feedback( node, error.message, true );
+			} );
+		}
+
+		$( '#shcm-gdrive-credentials' ).addEventListener( 'submit', function ( event ) {
+			event.preventDefault();
+			var node = $( '#shcm-gdrive-feedback' );
+			var drive = status.drive || {};
+			var id = $( '#shcm-gdrive-client-id' );
+			var secret = $( '#shcm-gdrive-client-secret' );
+			feedback( node, '…' );
+			var save = drive.from_constants
+				? Promise.resolve()
+				: api( 'gdrive_credentials', { client_id: id.value.trim(), client_secret: secret.value.trim() } );
+			save.then( function () {
+				secret.value = '';
+				return connect();
+			} ).catch( function ( error ) {
+				feedback( node, error.message, true );
+			} );
+		} );
+
+		document.addEventListener( 'click', function ( event ) {
+			var button = event.target.closest( '[data-action]' );
+			if ( ! button || ! $( '.shcm-wrap' ).contains( button ) ) {
+				return;
+			}
+			var action = button.getAttribute( 'data-action' );
+			var message = $( '#shcm-gdrive-message' );
+			switch ( action ) {
+				case 'connect':
+					connect();
+					break;
+				case 'adopt':
+					button.disabled = true;
+					api( 'backup_adopt', {} ).then( function ( next ) {
+						status = next;
+						loadServerSettings();
+						render();
+					} ).catch( function ( error ) {
+						button.disabled = false;
+						window.alert( error.message );
+					} );
+					break;
+				case 'test':
+					feedback( message, '…' );
+					api( 'gdrive_test', {} ).then( function ( result ) {
+						status.drive = result.drive;
+						render();
+						feedback( $( '#shcm-gdrive-message' ), result.message );
+					} ).catch( function ( error ) {
+						feedback( message, error.message, true );
+						refresh();
+					} );
+					break;
+				case 'list':
+					listDrive( button );
+					break;
+				case 'disconnect':
+					if ( ! window.confirm( strings.confirmDisconnect ) ) {
+						return;
+					}
+					api( 'gdrive_disconnect', {} ).then( function ( next ) {
+						status = next;
+						loadServerSettings();
+						render();
+						if ( next.notice ) {
+							feedback( $( '#shcm-gdrive-message' ), next.notice, true );
+						}
+					} ).catch( function ( error ) {
+						window.alert( error.message );
+					} );
+					break;
+				case 'retry':
+					$( '#shcm-result-panel' ).classList.add( 'shcm-hidden' );
+					runner.start( 'backup_upload', { history_id: button.getAttribute( 'data-history' ) } );
+					break;
+			}
+		} );
+
+		function listDrive( button ) {
+			var panel = $( '#shcm-gdrive-files' );
+			var box = $( '[data-role="files"]', panel );
+			panel.classList.remove( 'shcm-hidden' );
+			box.innerHTML = '<p>…</p>';
+			button.disabled = true;
+			api( 'gdrive_list', {} ).then( function ( result ) {
+				button.disabled = false;
+				if ( ! result.files.length ) {
+					box.innerHTML = '<p class="shcm-empty">' + escapeHtml( L.noDriveFiles ) + '</p>';
+					return;
+				}
+				box.innerHTML = '<div class="shcm-table-scroll"><table class="widefat striped shcm-table"><thead><tr><th>' + escapeHtml( L.colName ) + '</th><th>' + escapeHtml( L.colDate ) + '</th><th>' + escapeHtml( L.colSize ) + '</th><th></th></tr></thead><tbody>' +
+					result.files.map( function ( file ) {
+						return '<tr><td><code>' + escapeHtml( file.name ) + '</code>' + ( file.kind === 'manual' ? ' ' + tag( L.sentByHand ) : '' ) + '</td>' +
+							'<td>' + escapeHtml( file.date ) + '</td><td>' + formatBytes( file.size ) + '</td>' +
+							'<td class="shcm-actions">' + ( file.link ? '<a class="button button-small" href="' + escapeHtml( file.link ) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml( L.openInDrive ) + '</a>' : '' ) + '</td></tr>';
+					} ).join( '' ) + '</tbody></table></div>' +
+					'<p class="description">' + escapeHtml( L.restoreHint ) + '</p>';
+			} ).catch( function ( error ) {
+				button.disabled = false;
+				box.innerHTML = '<div class="shcm-alert shcm-alert--error">' + escapeHtml( error.message ) + '</div>';
+			} );
+		}
+
+		$$( '[data-copy]' ).forEach( function ( button ) {
+			button.addEventListener( 'click', function () {
+				var source = $( button.getAttribute( 'data-copy' ) );
+				var text = source ? source.textContent : '';
+				var done = function () {
+					button.textContent = strings.copied || 'Copied';
+				};
+				if ( navigator.clipboard && window.isSecureContext ) {
+					navigator.clipboard.writeText( text ).then( done );
+				} else {
+					var range = document.createRange();
+					range.selectNodeContents( source );
+					var selection = window.getSelection();
+					selection.removeAllRanges();
+					selection.addRange( range );
+					try {
+						document.execCommand( 'copy' );
+						done();
+					} catch ( e ) {
+						// Leave the text selected for a manual copy.
+					}
+				}
+			} );
+		} );
+
+		render();
+
+		// A backup that is already running (started by the schedule or in
+		// another tab): show its progress.
+		if ( status.schedule && status.schedule.running ) {
+			$( '#shcm-backup-now' ).disabled = true;
+			runner.resume( status.schedule.running, '' );
+		}
+	}
+
 	document.addEventListener( 'DOMContentLoaded', function () {
 		initExport();
 		initImport();
 		initBackups();
 		initTools();
 		initSettings();
+		initSchedules();
 	} );
 }() );

@@ -373,6 +373,8 @@ class Job {
 	public function toPublicArray() {
 		$data = $this->data;
 		unset( $data['state'] );
+		// Sealed, but the browser has no use for a backup's password.
+		unset( $data['params']['password_sealed'] );
 		$data['warnings']       = array_slice( $this->data['warnings'], -25 );
 		$data['warnings_total'] = isset( $this->data['warnings_total'] ) ? (int) $this->data['warnings_total'] : count( $this->data['warnings'] );
 		return $data;

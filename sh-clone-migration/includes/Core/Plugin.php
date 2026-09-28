@@ -82,16 +82,33 @@ class Plugin {
 		if ( is_admin() ) {
 			( new Menu( $this ) )->register();
 			( new Notices( $this ) )->register();
+			if ( self::backupsAvailable() ) {
+				( new \SHCM\Admin\DriveAuth( $this ) )->register();
+			}
 			add_action( 'admin_init', array( ServerRules::class, 'maybeInstall' ) );
 		}
 
 		( new Ajax( $this ) )->register();
 		( new Rest( $this ) )->register();
 		( new Scheduler( $this ) )->register();
+		if ( self::backupsAvailable() ) {
+			$this->backups()->register();
+		} else {
+			// Switched off: drop backup events left from when it was on, and
+			// cancel (and record) a backup still running, before the worker
+			// (priority 10) would carry it on.
+			add_action( 'shcm_worker', array( \SHCM\Backup\BackupManager::class, 'unscheduleAll' ) );
+			$this->backups()->registerBookkeeping();
+			add_action( 'shcm_worker', array( $this->backups(), 'cancelRunning' ), 5 );
+		}
 
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			\WP_CLI::add_command( 'shcm', \SHCM\CLI\Commands::class );
 			\WP_CLI::add_command( 'sh-migration', \SHCM\CLI\Commands::class );
+			foreach ( self::backupsAvailable() ? array( 'shcm', 'sh-migration' ) : array() as $shcm_root ) {
+				\WP_CLI::add_command( $shcm_root . ' backup', \SHCM\CLI\BackupCommands::class );
+				\WP_CLI::add_command( $shcm_root . ' gdrive', \SHCM\CLI\DriveCommands::class );
+			}
 		}
 	}
 
@@ -227,6 +244,33 @@ class Plugin {
 			'runner',
 			function () {
 				return new JobRunner( $this->jobs(), $this->registry(), $this->logger(), $this->settings() );
+			}
+		);
+	}
+
+	/**
+	 * Whether scheduled backups are switched on.
+	 *
+	 * They are, unless wp-config.php defines SHCM_DISABLE_BACKUPS as true:
+	 * for hosts that forbid background work or outgoing connections, or to
+	 * rule the feature out while troubleshooting. Migrations are unaffected.
+	 *
+	 * @return bool
+	 */
+	public static function backupsAvailable() {
+		return ! ( defined( 'SHCM_DISABLE_BACKUPS' ) && SHCM_DISABLE_BACKUPS );
+	}
+
+	/**
+	 * Scheduled and on-demand backups.
+	 *
+	 * @return \SHCM\Backup\BackupManager
+	 */
+	public function backups() {
+		return $this->service(
+			'backups',
+			function () {
+				return new \SHCM\Backup\BackupManager( $this );
 			}
 		);
 	}

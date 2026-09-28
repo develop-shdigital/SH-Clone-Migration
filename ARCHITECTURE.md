@@ -448,6 +448,111 @@ tasks are queued in an option and executed on the next admin request, when
 Elementor and WooCommerce are actually available. That is the difference
 between calling a regeneration routine and pretending to.
 
+## Scheduled backups
+
+A backup is an ordinary export job with a few extra parameters (`backup`,
+`background`, and `password_source` when encrypted), so it gets the same
+archive, verification and SHA-256 as a manual export. The export stage list
+gains two stages when needed: `upload` (Google Drive) and `retention`. An
+"upload only" job (retrying an upload, or sending an existing archive to
+Drive) is an export job whose stage list is just those two.
+
+**Where the configuration lives.** Not in `wp_options`. The options table
+travels inside every archive and is replaced by every import, so a staging
+copy would otherwise inherit production's schedule and Drive access, upload
+into production's folder and prune production's backups. The schedule, the
+Drive connection and the history are small JSON documents in
+`wp-content/shcm-storage/config/`, a directory the export never includes and
+the import never overwrites. Each file starts with `<?php exit; ?>`, so a
+server that ignores the directory's `.htaccess` runs an empty script instead
+of serving it. Read-modify-write goes through `flock()`.
+
+**Secrets at rest.** The Drive client secret, refresh and access tokens, an
+upload session URI and the password of encrypted backups are sealed by
+`SecretBox`: XChaCha20-Poly1305 (or AES-256-GCM), with a key derived by
+HKDF-SHA256 from the secret keys in `wp-config.php` and a separate context per
+field, so one sealed value cannot be moved into another field. A value copied
+to another site simply does not open there and reads as "not connected".
+
+**Copies of the site.** The schedule and the connection record a fingerprint
+of the installation: the real path of ABSPATH, the database name, the table
+prefix and the home URL (the network's on multisite; it comes from the
+database unless `WP_HOME` is set). The database host is left out on purpose,
+because hosts rewrite it ("localhost" becoming "127.0.0.1") while the site
+stays the same; a copy on another database server with the same path, name,
+prefix and address is therefore not told apart. A copy made by other means
+(a host's staging tool) has a different fingerprint: its schedule is paused
+and its connection is not used until an administrator confirms "this is the
+same site". Reconnecting on the copy gives it a new site id, so it never
+lists or prunes the original's Drive files.
+
+**When.** There is no monthly WP-Cron recurrence, and recurring events drift,
+so the schedule is a single event at the computed next run
+(`Schedule::nextRun()`, DST-aware, in the site timezone). `reconcile()` runs
+every minute from the worker, daily, on admin screens and on activation: it
+re-arms the event, removes it when the schedule is off or paused, and repairs
+what an import did to the cron option (the imported site's events arrive with
+its `cron` option; they find this site's schedule, not theirs). A run that was
+missed runs once, as soon as possible. `wp shcm backup run` (system cron) and
+the WP-Cron event share one "start if due" path, so they cannot both start the
+same run. A backup never starts while an import or search & replace is
+running (it is postponed by 15 minutes, up to eight times) or while the
+previous backup is still running (skipped, recorded and e-mailed).
+
+**Running without a browser.** Jobs advance in slices of a few seconds. A
+background job asks the site for its next slice with a non-blocking loopback
+request to `admin-ajax.php` carrying an HMAC of the job id (the same technique
+WordPress uses to spawn WP-Cron); the handler can advance that job and nothing
+else. When loopbacks are blocked (HTTP authentication on a staging site, a
+firewall), the minute worker picks the job up instead, whatever the
+"Background worker" setting says (that setting is about browser migrations);
+System Status reports blocked loopbacks only when one was sent and never
+arrived. A job that asks to wait (an upload backing off, a database retry)
+gets a WP-Cron event at that time instead of a loopback; one that used up its
+budget continues at once. An open Scheduled Backups page polls every two
+seconds but leaves a healthy chain alone: it steps in only when the job has
+sat idle for 20 seconds (or loopbacks cannot run), and then drives it through
+the same runner, which starts the chain again. Under WP-CLI (`wp cron event
+run` from a system cron job) the loopbacks are fired too.
+
+**Requests that die.** A request killed mid-step (a PHP fatal error, the
+memory limit, a server timeout) cannot record anything, so every tick marks
+the job "tick open" when it starts and clears the mark when it ends normally.
+A tick that finds the mark still set knows its predecessor died; after three
+such requests in a row without any saved progress the job fails with that
+explanation (and a backup sends its failure e-mail) instead of being retried
+forever while every later scheduled run is skipped.
+
+**One slice at a time.** Every tick takes an exclusive `flock()` on
+`jobs/<id>.lock` (released by the operating system if the process dies) and,
+once it holds it, continues from the job as saved on disk, not from the copy
+the caller loaded. A second driver (a browser tab, the worker, a loopback)
+gets "busy" back and changes nothing. A cancel from another request is a
+marker file the lock holder notices at its next checkpoint; it then runs the
+cleanups and marks the job cancelled, exactly once.
+
+**Uploading.** `RemoteUploadStage` runs only after `verify`, when the archive
+can no longer change. It checks the connection and the free space, finds or
+creates the site's folder (identified by private `appProperties`, not by
+name), opens a resumable upload session and sends chunks of 8 MB (a multiple
+of 256 KB, smaller when memory is tight). Every step resumes from what Drive
+reports it has, never from what this side believes it sent. Rate limits and
+server errors back off (30 s up to 16 min, about half an hour in total); an
+expired or unknown session starts the upload again; a revoked grant marks the
+connection "reconnect". The finished file is checked against the size and the
+SHA-256 Drive reports (MD5 when Drive reports no SHA-256). Chunk requests carry
+no `Authorization` header: the session URI is the credential, which is why it
+is kept sealed. In a backup job a permanent upload failure does not fail the
+job, because the local backup is good; it is recorded, e-mailed and can be
+retried.
+
+**Retention.** Only backups count (never manual exports), and only files this
+site uploaded as backups are ever deleted from Drive. The newest *N* stay on
+the server and the newest *M* on Drive; a local backup whose upload failed is
+the only copy and is kept. Archives an import is using are never touched, and
+the global "keep at most N archives" setting leaves backups to their own
+retention.
+
 ## Security model
 
 Summarised in the README and detailed in [docs/SECURITY.md](docs/SECURITY.md).
