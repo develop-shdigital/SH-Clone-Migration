@@ -55,6 +55,8 @@ fail() { printf 'FAIL  %s  (%s)\n' "$1" "$2"; FAILED=$((FAILED + 1)); }
 eq() { if [ "$2" = "$3" ]; then pass "$1"; else fail "$1" "expected [$2], got [$3]"; fi; }
 has() { case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "[$3] does not contain [$2]" ;; esac; }
 hasnt() { case "$3" in *"$2"*) fail "$1" "unexpected [$2]" ;; *) pass "$1" ;; esac; }
+# matches NAME ERE VALUE: VALUE must match the extended regular expression.
+matches() { if [[ "$3" =~ $2 ]]; then pass "$1"; else fail "$1" "[$3] does not match /$2/"; fi; }
 
 # http METHOD URL [curl args...]: prints the status; headers go to $H, the body to $B. "Expect:" is blanked because
 # php -S never answers "100-continue" and curl would stall a second on every large PUT.
@@ -88,6 +90,28 @@ ctl() {
 	s=$(curl -s -o "$WORK/ctl" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data "$1" "$BASE/__control")
 	[ "$s" = 200 ] || fail "control $1" "HTTP $s $(cat "$WORK/ctl")"
 }
+# ctl_status JSON: posts a control request and prints its HTTP status (the body lands in $B).
+ctl_status() { http POST "$BASE/__control" -H 'Content-Type: application/json' --data "$1"; }
+# uplog: "status|content_length|authorization" of the newest request to /upload/drive/v3/files in the request log
+# (content_length "absent" when the header was not sent).
+uplog() {
+	curl -s -o "$WORK/state.json" "$BASE/__state"
+	php -r '
+		$d = json_decode((string) file_get_contents($argv[1]), true);
+		foreach (array_reverse($d["log"]) as $e) {
+			if ("/upload/drive/v3/files" !== $e["path"]) { continue; }
+			$cl = array_key_exists("content_length", $e) ? (null === $e["content_length"] ? "absent" : $e["content_length"]) : "<missing>";
+			$au = array_key_exists("authorization", $e) ? ($e["authorization"] ? "true" : "false") : "<missing>";
+			echo $e["status"], "|", $cl, "|", $au;
+			exit(0);
+		}
+		echo "<none>";
+	' "$WORK/state.json"
+}
+# state_value PATH: value at a dotted path of GET /__state.
+state_value() { curl -s -o "$B" "$BASE/__state"; j "$1"; }
+# part_bytes: total size of the open upload sessions' part files on disk.
+part_bytes() { cat "$FAKE_GOOGLE_DIR"/uploads/*.part 2>/dev/null | wc -c | tr -d ' '; }
 auth_url() { echo "$BASE/o/oauth2/v2/auth?client_id=$(enc "$1")&redirect_uri=$(enc "$REDIRECT")&response_type=code&scope=$(enc "$SCOPE")&access_type=offline&state=st-123$2"; }
 exchange() {
 	http POST "$BASE/token" --data-urlencode "code=$1" --data-urlencode "client_id=$CLIENT_ID" \
@@ -194,6 +218,9 @@ ctl '{"quota":{"limit":1000000}}'
 s=$(http POST "$BASE/upload/drive/v3/files?uploadType=resumable" "${AUTH[@]}" "${JSON[@]}" -H "X-Upload-Content-Length: $TOTAL" --data '{"name":"too-big.wpress"}')
 eq "upload: declared size over quota -> 403 storageQuotaExceeded" "403 storageQuotaExceeded" "$s $(j error.errors.0.reason)"
 ctl '{"quota":{"limit":16106127360}}'
+s=$(http POST "$BASE/upload/drive/v3/files?uploadType=resumable" "${AUTH[@]}")
+eq "upload: initiation without Content-Length -> 411 HTML" "411|text/html; charset=utf-8" "$s|$(hdr Content-Type)"
+has "upload: 411 page as Google's front end words it" "POST requests require a <code>Content-length</code> header." "$(body)"
 
 META='{"name":"example.test-backup-202609281200.wpress","parents":["'"$FOLDER"'"],"mimeType":"application/octet-stream","description":"SH Clone Migration backup","appProperties":{"shcm_site":"site-abc","shcm_backup":"job-1","shcm_sha256":"'"$LOCAL_SHA"'"}}'
 FIELDS='id,name,size,md5Checksum,sha256Checksum,createdTime,parents,appProperties'
@@ -203,6 +230,7 @@ SESSION=$(hdr Location)
 eq "upload: initiation -> 200 with empty body" "200 0" "$s $(wc -c <"$B" | tr -d ' ')"
 has "upload: Location carries upload_id" "upload_id=" "$SESSION"
 has "upload: Location keeps the fields parameter" "fields=" "$SESSION"
+eq "log: initiation logged with its Content-Length and Authorization" "200|${#META}|true" "$(uplog)"
 
 put_chunk() { # START LENGTH [file] (no Authorization: the session URI is the credential)
 	local file="${3:-$WORK/upload.bin}" total
@@ -214,8 +242,25 @@ status_query() { http PUT "$SESSION" -H "Content-Range: bytes */$1" --data-binar
 
 s=$(put_chunk 0 524288)
 eq "chunk 1 (512 KiB) -> 308 Range bytes=0-524287" "308 bytes=0-524287" "$s $(hdr Range)"
+eq "log: chunk PUT has Content-Length and no Authorization" "308|524288|false" "$(uplog)"
 s=$(status_query "$TOTAL")
 eq "status query -> 308 Range bytes=0-524287" "308 bytes=0-524287" "$s $(hdr Range)"
+eq "log: status query sent Content-Length: 0" "308|0|false" "$(uplog)"
+s=$(http PUT "$SESSION" -H "Content-Range: bytes */$TOTAL")
+eq "status query without Content-Length -> 411 HTML" "411|text/html; charset=utf-8" "$s|$(hdr Content-Type)"
+has "411 page names the missing header" "PUT requests require a <code>Content-length</code> header." "$(body)"
+eq "log: the 411 request had no Content-Length" "411|absent|false" "$(uplog)"
+ctl '{"require_content_length":false}'
+s=$(http PUT "$SESSION" -H "Content-Range: bytes */$TOTAL")
+eq "require_content_length false: the same request -> 308" "308 bytes=0-524287" "$s $(hdr Range)"
+ctl '{"require_content_length":true}'
+s=$(http PUT "$SESSION" "${AUTH[@]}" -H "Content-Range: bytes */$TOTAL" --data-binary '')
+eq "Authorization on the session URI: ignored, but logged" "308 308|0|true" "$s $(uplog)"
+s=$(ctl_status '{"expire_sessions":true,"access_token_ttl":-1}')
+eq "control: one invalid value -> 400, nothing applied" "400 false" "$s $(j ok)"
+eq "control 400 applies nothing: the session's bytes stay on disk" "524288" "$(part_bytes)"
+s=$(status_query "$TOTAL")
+eq "control 400 applies nothing: the session stays open" "308 bytes=0-524287" "$s $(hdr Range)"
 s=$(put_chunk 524288 100000)
 eq "non-final chunk not a multiple of 256 KiB -> 400" "400" "$s"
 ctl '{"chunk_commit_limit":262144}'
@@ -238,7 +283,7 @@ eq "final: sha256Checksum equals the local file" "$LOCAL_SHA" "$(j sha256Checksu
 eq "final: md5Checksum equals the local file" "$LOCAL_MD5" "$(j md5Checksum)"
 eq "final: parent folder" "$FOLDER" "$(j parents.0)"
 eq "final: appProperties kept" "job-1" "$(j appProperties.shcm_backup)"
-has "final: createdTime is RFC 3339 with ms" "Z" "$(j createdTime)"
+matches "final: createdTime is RFC 3339 with ms" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$' "$(j createdTime)"
 s=$(status_query "$TOTAL")
 eq "status query after completion -> 200 same file" "200 $FILE_ID" "$s $(j id)"
 curl -s -o "$WORK/blob.bin" "$BASE/__blob/$FILE_ID"
@@ -262,29 +307,48 @@ EMPTY_ID=$(j id)
 
 echo "--- Listing, trash"
 Q="'$FOLDER' in parents and trashed=false and appProperties has { key='shcm_site' and value='site-abc' }"
-IDS=""
-TOKEN=""
-PAGES=0
-LAST_TS=""
-ORDER_OK=1
-while :; do
-	ARGS=(-G --data-urlencode "q=$Q" --data-urlencode 'orderBy=createdTime desc' --data-urlencode 'pageSize=1' \
-		--data-urlencode 'fields=nextPageToken,files(id,name,size,createdTime)')
-	[ -n "$TOKEN" ] && ARGS+=(--data-urlencode "pageToken=$TOKEN")
-	s=$(http GET "$BASE/drive/v3/files" "${AUTH[@]}" "${ARGS[@]}")
-	[ "$s" = 200 ] || break
-	PAGES=$((PAGES + 1))
-	TS=$(j files.0.createdTime)
-	if [ -n "$LAST_TS" ] && [[ "$TS" > "$LAST_TS" ]]; then ORDER_OK=0; fi
-	LAST_TS="$TS"
-	IDS="$IDS $(j files.0.id)"
-	TOKEN=$(j nextPageToken)
-	[ "$TOKEN" = "<missing>" ] && TOKEN="" && break
-	[ "$PAGES" -gt 10 ] && break
-done
-eq "list: pageSize=1 walks 3 pages" "3" "$PAGES"
-eq "list: 3 distinct files" "3" "$(echo "$IDS" | tr ' ' '\n' | grep -v '^$' | sort -u | wc -l | tr -d ' ')"
-eq "list: orderBy createdTime desc" "1" "$ORDER_OK"
+# list_walk ORDER PAGE_SIZE: follows nextPageToken through the listing of $Q until it is absent. Sets WALK_PAGES,
+# WALK_SIZES (files per page, comma-separated) and WALK_IDS (ids in the order served). ORDER "" = Google's default.
+list_walk() {
+	local token="" args ids
+	WALK_PAGES=0
+	WALK_SIZES=""
+	WALK_IDS=""
+	while [ "$WALK_PAGES" -lt 10 ]; do
+		args=(-G --data-urlencode "q=$Q" --data-urlencode "pageSize=$2" --data-urlencode 'fields=nextPageToken,files(id)')
+		[ -n "$1" ] && args+=(--data-urlencode "orderBy=$1")
+		[ -n "$token" ] && args+=(--data-urlencode "pageToken=$token")
+		s=$(http GET "$BASE/drive/v3/files" "${AUTH[@]}" "${args[@]}")
+		if [ "$s" != 200 ]; then WALK_IDS="$WALK_IDS HTTP-$s"; return; fi
+		WALK_PAGES=$((WALK_PAGES + 1))
+		WALK_SIZES="$WALK_SIZES${WALK_SIZES:+,}$(jcount files)"
+		ids=$(php -r '$d = json_decode((string) file_get_contents($argv[1]), true); echo implode(" ", array_column(isset($d["files"]) ? $d["files"] : array(), "id"));' "$B")
+		WALK_IDS="$WALK_IDS${WALK_IDS:+${ids:+ }}$ids"
+		token=$(j nextPageToken)
+		[ "$token" = "<missing>" ] && return
+	done
+}
+# The oldest file becomes the most recently modified, so createdTime order differs from the default
+# (folder,modifiedTime desc,name), from name order and from creation (seq) order.
+s=$(http PATCH "$BASE/drive/v3/files/$FILE_ID?fields=id" "${AUTH[@]}" "${JSON[@]}" --data '{"description":"touched"}')
+eq "patch: description -> 200 (oldest file is now the newest modified)" "200" "$s"
+list_walk 'createdTime desc' 1
+eq "list: orderBy createdTime desc, pageSize=1 -> 3 pages, newest created first" "3|1,1,1|$EMPTY_ID $SMALL_ID $FILE_ID" "$WALK_PAGES|$WALK_SIZES|$WALK_IDS"
+list_walk 'createdTime' 10
+eq "list: orderBy createdTime -> oldest created first" "1|$FILE_ID $SMALL_ID $EMPTY_ID" "$WALK_PAGES|$WALK_IDS"
+list_walk '' 10
+eq "list: default order is folder,modifiedTime desc,name" "$FILE_ID $EMPTY_ID $SMALL_ID" "$WALK_IDS"
+ctl '{"short_pages":1}'
+list_walk 'createdTime' 10
+eq "short_pages 1: a short page still has nextPageToken, nothing is skipped" "2|1,2|$FILE_ID $SMALL_ID $EMPTY_ID" "$WALK_PAGES|$WALK_SIZES|$WALK_IDS"
+ctl '{"short_pages":0,"short_pages_times":2}'
+list_walk 'createdTime' 10
+eq "short_pages 0 x2: two empty pages with nextPageToken, then the rest" "3|0,0,3|$FILE_ID $SMALL_ID $EMPTY_ID" "$WALK_PAGES|$WALK_SIZES|$WALK_IDS"
+eq "short_pages is off once used up" "null" "$(state_value controls.short_pages)"
+ctl '{"short_pages":2}'
+list_walk 'createdTime' 1
+eq "short_pages: pages that are not cut do not use it up" "3|1,1,1|1" "$WALK_PAGES|$WALK_SIZES|$(state_value controls.short_pages_times)"
+ctl '{"short_pages":null}'
 s=$(http GET "$BASE/drive/v3/files" "${AUTH[@]}" -G --data-urlencode "q=$Q" --data-urlencode 'pageSize=1' --data-urlencode 'fields=files(id)')
 eq "list: no nextPageToken unless it is in fields (as Google)" "200 <missing>" "$s $(j nextPageToken)"
 s=$(http GET "$BASE/drive/v3/files" "${AUTH[@]}" -G --data-urlencode 'pageToken=bogus')
@@ -297,6 +361,10 @@ s=$(http GET "$BASE/drive/v3/files" "${AUTH[@]}" -G --data-urlencode "q='$FOLDER
 eq "list: without trashed=false Google also returns trashed files" "3" "$(jcount files)"
 
 echo "--- Download, delete"
+s=$(ctl_status '{"reset":true,"quota":{"limit":"x"}}')
+eq "control: reset plus an invalid value -> 400" "400 false" "$s $(j ok)"
+curl -s -o "$WORK/blob.bin" "$BASE/__blob/$FILE_ID"
+eq "control 400 applies nothing: no blob is wiped" "$LOCAL_SHA" "$(sha "$WORK/blob.bin")"
 s=$(http GET "$BASE/drive/v3/files/$FILE_ID?alt=media" "${AUTH[@]}" -H 'Range: bytes=100-199')
 tail -c +101 "$WORK/upload.bin" | head -c 100 >"$WORK/slice.bin"
 eq "alt=media Range -> 206 Content-Range" "206 bytes 100-199/$TOTAL" "$s $(hdr Content-Range)"
@@ -311,6 +379,13 @@ eq "get deleted file -> 404 notFound" "404 notFound" "$s $(j error.errors.0.reas
 echo "--- Sessions, faults, expiry"
 s=$(http POST "$BASE/upload/drive/v3/files?uploadType=resumable" "${AUTH[@]}" "${JSON[@]}" -H 'X-Upload-Content-Length: 300000' --data '{"name":"late.wpress"}')
 SESSION=$(hdr Location)
+s=$(ctl_status '{"advance_time":1000000,"quota":{"limit":"x"}}')
+eq "control: advance_time plus an invalid value -> 400" "400 false" "$s $(j ok)"
+eq "control 400 applies nothing: the fake clock stays put" "0" "$(state_value clock_offset)"
+s=$(http GET "$BASE/drive/v3/about?fields=user" "${AUTH[@]}")
+eq "control 400 applies nothing: the access token still works" "200" "$s"
+s=$(status_query 300000)
+eq "control 400 applies nothing: the open session survives (308, no Range)" "308|" "$s|$(hdr Range)"
 ctl '{"expire_sessions":true}'
 s=$(put_chunk 0 262144 "$WORK/small.bin")
 eq "expired session -> 404 text/plain Not Found" "404|text/plain; charset=utf-8|Not Found" "$s|$(hdr Content-Type)|$(body)"

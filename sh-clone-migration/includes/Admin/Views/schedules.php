@@ -231,16 +231,20 @@ Menu::header(
 		<form id="shcm-gdrive-credentials" class="shcm-grid" novalidate>
 			<p>
 				<label for="shcm-gdrive-client-id"><?php esc_html_e( 'Client ID', 'sh-clone-migration' ); ?></label>
-				<input type="text" id="shcm-gdrive-client-id" name="client_id" class="large-text code" autocomplete="off" spellcheck="false" value="<?php echo esc_attr( $shcm_drive['client_id'] ); ?>" <?php disabled( $shcm_drive['from_constants'] ); ?>>
+				<input type="text" id="shcm-gdrive-client-id" name="client_id" class="large-text code" autocomplete="off" spellcheck="false" value="<?php echo esc_attr( $shcm_drive['client_id'] ); ?>" <?php disabled( $shcm_drive['id_constant'] ); ?>>
 			</p>
 			<p>
 				<label for="shcm-gdrive-client-secret"><?php esc_html_e( 'Client secret', 'sh-clone-migration' ); ?></label>
-				<input type="password" id="shcm-gdrive-client-secret" name="client_secret" class="large-text code" autocomplete="new-password" spellcheck="false" placeholder="<?php echo esc_attr( $shcm_drive['has_secret'] ? __( 'Stored (leave empty to keep it)', 'sh-clone-migration' ) : '' ); ?>" <?php disabled( $shcm_drive['from_constants'] ); ?>>
+				<input type="password" id="shcm-gdrive-client-secret" name="client_secret" class="large-text code" autocomplete="new-password" spellcheck="false" placeholder="<?php echo esc_attr( $shcm_drive['secret_constant'] ? __( 'Set in wp-config.php', 'sh-clone-migration' ) : ( $shcm_drive['has_secret'] ? __( 'Stored (leave empty to keep it)', 'sh-clone-migration' ) : '' ) ); ?>" <?php disabled( $shcm_drive['secret_constant'] ); ?>>
 			</p>
 			<p class="shcm-grid__full">
 				<button type="submit" class="button button-primary" id="shcm-gdrive-connect"><?php esc_html_e( 'Connect Google Drive', 'sh-clone-migration' ); ?></button>
 				<?php if ( $shcm_drive['from_constants'] ) : ?>
 					<span class="description"><?php esc_html_e( 'The client ID and secret come from wp-config.php (SHCM_GDRIVE_CLIENT_ID / SHCM_GDRIVE_CLIENT_SECRET).', 'sh-clone-migration' ); ?></span>
+				<?php elseif ( $shcm_drive['id_constant'] ) : ?>
+					<span class="description"><?php esc_html_e( 'The client ID comes from wp-config.php (SHCM_GDRIVE_CLIENT_ID).', 'sh-clone-migration' ); ?></span>
+				<?php elseif ( $shcm_drive['secret_constant'] ) : ?>
+					<span class="description"><?php esc_html_e( 'The client secret comes from wp-config.php (SHCM_GDRIVE_CLIENT_SECRET).', 'sh-clone-migration' ); ?></span>
 				<?php endif; ?>
 				<span class="shcm-save-feedback" id="shcm-gdrive-feedback" role="status"></span>
 			</p>

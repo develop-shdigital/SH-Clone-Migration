@@ -16,7 +16,7 @@ because it excludes `tests/`.
 FAKE_GOOGLE_DIR=/tmp/fake-google php -S 127.0.0.1:8091 tests/fake-google/router.php
 # optional: PHP_CLI_SERVER_WORKERS=4 (state is flock()ed, parallel workers are safe)
 
-tests/fake-google/selftest.sh          # starts its own server on 8091 (or the next free port), 86 checks
+tests/fake-google/selftest.sh          # starts its own server on 8091 (or the next free port), 110 checks
 tests/fake-google/selftest.sh 9000     # first port to try
 ```
 
@@ -121,6 +121,9 @@ unexpired and unrevoked, belong to the configured client, and carry `drive.file`
 - `orderBy` takes Google's keys with an optional ` desc`. The default is `folder,modifiedTime desc,name`.
 - `pageSize` defaults to 100, maximum 1000; values below 1 give 400. `pageToken`/`nextPageToken` are opaque, and a
   foreign or garbled token gives 400.
+- Pages are full by default. Google documents that "partial or empty result pages are possible even before the end
+  of the files list has been reached", so the `short_pages` control serves short or empty pages that still carry
+  `nextPageToken`. A client must page until the token is absent, not until a page is shorter than `pageSize`.
 - Only files created with the current client ID are visible (`drive.file`), so changing `client_id` hides earlier
   backups, just as a recreated Cloud project would.
 
@@ -167,12 +170,20 @@ unexpired and unrevoked, belong to the configured client, and carry `drive.file`
   `X-Upload-Content-Type` becomes `mimeType` when the metadata has none.
 - Metadata errors (parent, id, properties) come back now.
 - If `usage >= limit`, or `usage + X-Upload-Content-Length > limit`, it answers 403 `storageQuotaExceeded`.
+- Without a `Content-Length` header (and without `Transfer-Encoding: chunked`) it answers Google's HTML
+  `411 Length Required` page, as for the session PUT below.
 - On success: `200`, empty body,
   `Location: BASE/upload/drive/v3/files?<original query, e.g. uploadType=resumable&fields=…>&upload_id=AFake…`,
   plus `X-GUploader-UploadID`. Other `uploadType` values give 400 (not emulated).
 
 **`PUT <session URI>`**
-- Needs no `Authorization`; the session URI is the credential, and an Authorization header is ignored.
+- Needs no `Authorization`; the session URI is the credential. An Authorization header is ignored, but the request
+  log records whether one was sent (`authorization`), so a test can assert the client leaves it out.
+- **Needs `Content-Length`** (or `Transfer-Encoding: chunked`), also on an empty status query: without it the answer
+  is Google's HTML `411 Length Required` page ("PUT requests require a `Content-length` header."), before the session
+  is even looked up. The research asks status queries to send `Content-Length: 0`, and WordPress's HTTP API sends no
+  length for an empty PUT body unless the caller sets the header (see caveats). `{"require_content_length": false}`
+  turns the check off. For PUT this is **unverified** against Google (see notes).
 - A chunk is `Content-Range: bytes S-E/T` (or `/*`) with exactly `E-S+1` body bytes:
   - A non-final chunk must be a multiple of 262144 bytes; otherwise 400 text/plain.
   - If `S` is beyond the committed size (a gap), nothing is stored and the answer is 308 with the committed range.
@@ -197,8 +208,10 @@ unexpired and unrevoked, belong to the configured client, and carry `drive.file`
 
 ## Control API (test only)
 
-`POST /__control` with a JSON object. Keys are applied in order, with `reset` always first. An unknown key or invalid
-value gives 400 `{"ok":false,"error":…}` and rolls back the whole request. Success is `{"ok":true,"applied":[…]}`.
+`POST /__control` with a JSON object. Every key is validated before any is applied, so an unknown key or invalid
+value gives 400 `{"ok":false,"error":…}` and changes nothing: no state, no fake clock, no stored or uploaded bytes.
+Valid requests are then applied in key order, with `reset` always first; files (`reset`, `expire_sessions`) are deleted
+only after every state change is in place. Success is `{"ok":true,"applied":[…]}`.
 
 | Key | Effect |
 |---|---|
@@ -215,6 +228,8 @@ value gives 400 `{"ok":false,"error":…}` and rolls back the whole request. Suc
 | `"quota": {"limit": N\|null, "usage": N}` | Quota limit (`null` = unlimited) and base usage. |
 | `"access_token_ttl": N` | Lifetime and `expires_in` of new access tokens (0 = born expired). |
 | `"chunk_commit_limit": N\|null` | The next chunk PUT commits at most N bytes (partial receipt, so a 308 with a smaller `Range`). One-shot unless `"chunk_commit_times": K` is given (K chunks, `-1` = until reset). `null` clears it. |
+| `"short_pages": N\|null` | The next `files.list` page that would hold more than N files holds only N (0 = an empty page), and still carries `nextPageToken` pointing just past what was served, so nothing is skipped. One-shot unless `"short_pages_times": K` is given (K cut pages, `-1` = until reset); pages that are not cut do not count. `null` clears it. With 0 and `-1` a client that follows tokens never finishes, so cap it. |
+| `"require_content_length": true\|false` | Persistent, default `true`: a POST or PUT to `/upload/drive/v3/files` without `Content-Length` (and not chunked) gets 411. |
 | `"advance_time": seconds` | Move the fake clock forward. It drives token, code, session, 6-month-idle and testing-mode expiry. |
 | `"clear_log": true` | Empty the request log. |
 | `"client_id"`, `"client_secret"`, `"email"`, `"name"`, `"redirect_uris"`, `"publishing_status"`, `"max_upload_size"` | Set config (also as `"config": {…}`). Changing `client_id` invalidates tokens and hides files, like a new Cloud project. |
@@ -253,10 +268,14 @@ More examples:
 - `codes`, redacted
 - `files`: full File resources plus `app`, the owning client; no content
 - `sessions`: redacted id, name, committed, total, expired, finalized, file_id
-- `log`: the last 200 requests as `{time, method, path, query, status, content_range?, fault?, note?}`
+- `log`: the last 200 requests as `{time, method, path, query, status, content_range?, content_length?, authorization?, fault?, note?}`
 
 In the log, `query` has `upload_id`, `token`, `code`, … redacted, `status` is `0` for a dropped connection, and
-`time` is wall-clock time. The log includes `/__*` calls.
+`time` is wall-clock time. The log includes `/__*` calls. Every request to `/upload/drive/v3/files` (initiation,
+chunk, status query, cancel) also has `content_length`, the header's value as sent (`"0"` for a proper status query)
+or `null` when the header was absent, and `authorization`, `true` when an Authorization header was sent. Together they
+let an end-to-end test assert both session-URI rules of the design: status queries send `Content-Length: 0`, chunk
+PUTs send no Authorization.
 
 **`GET /__blob/{id}`** returns the raw bytes of a stored file (no auth), for comparing SHA-256.
 **`GET /__health`** returns `ok`.
@@ -290,6 +309,10 @@ These were chosen here because Google does not document them, or the report mark
 - **Code exchange with a different `redirect_uri`** gets `redirect_uri_mismatch` (400). This is Google's observed
   behaviour; the report does not document it.
 - **Status of `invalid_grant`** is 400, per RFC 6749; the report marks it UNVERIFIED.
+- **411 Length Required on the upload path.** Google's front end is known to answer a POST without `Content-Length`
+  with this HTML page. That it does the same for a **PUT** to a session URI is **UNVERIFIED**; the fake is strict by
+  default so a client that relies on WordPress's defaults for an empty status query fails here rather than, possibly,
+  against Google. Accepting `Transfer-Encoding: chunked` without `Content-Length` is also unverified.
 - **DELETE** gets 204 with no body. The docs say "empty JSON object"; treat any 2xx as success.
 - **Metadata must be sent as JSON.** POST/PATCH/initiation bodies without a JSON `Content-Type` are refused (400
   `badContent`). This is stricter than necessary on purpose, because WordPress defaults to
@@ -316,6 +339,11 @@ Not emulated:
 
 ## Practical caveats
 
+- WordPress's HTTP API sends no `Content-Length` for a PUT with an empty body unless the caller sets the header. With
+  an explicit `Content-Length: 0` the header goes out. Checked against WordPress 7.1 with both Requests transports
+  (cURL with curl 8.5.0, and fsockopen): an explicit header gets 308, and no header gets 411. The plugin's
+  `Client::queryUpload()` sets it, and its status queries are logged with `content_length: "0"` and
+  `authorization: false`.
 - `php -S` never answers `Expect: 100-continue`. WordPress's Requests library sends it for bodies over 1 MB, so each
   large chunk PUT waits about 1 s before curl sends the body anyway. That is slow but correct; `selftest.sh` sends
   `Expect:` empty.

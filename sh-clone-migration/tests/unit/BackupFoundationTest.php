@@ -653,6 +653,52 @@ class BackupFoundationTest extends TestCase {
 		);
 	}
 
+	public function testDocumentsAreReadableByOtherSystemAccounts() {
+		// WP-CLI and PHP-FPM often run as different users (root or a deploy
+		// user, and www-data): each must be able to read what the other wrote.
+		$store = $this->store();
+		$store->write( 'schedule', array( 'a' => 1 ) );
+		$store->update(
+			'gdrive',
+			function ( array $data ) {
+				return array( 'b' => 2 );
+			}
+		);
+		$this->assertSame( 0644, fileperms( $store->path( 'schedule' ) ) & 0777 );
+		$this->assertSame( 0644, fileperms( $store->path( 'gdrive' ) ) & 0777 );
+		$this->assertSame( 0644, fileperms( $store->path( 'gdrive' ) . '.lock' ) & 0777 );
+		$this->assertTrue( $store->readable( 'schedule' ) );
+		$this->assertTrue( $store->readable( 'history' ), 'a missing document is not a problem' );
+		$this->assertSame( array(), $store->problems( array( 'schedule', 'gdrive', 'history' ) ) );
+	}
+
+	public function testUnreadableDocumentIsNeverOverwritten() {
+		if ( function_exists( 'posix_geteuid' ) && 0 === posix_geteuid() ) {
+			$this->markTestSkipped( 'root can read every file; covered by the www-data check in scripts/backup-e2e.sh.' );
+		}
+		$store = $this->store();
+		$store->write( 'gdrive', array( 'token' => 'keep me' ) );
+		chmod( $store->path( 'gdrive' ), 0200 );
+		try {
+			$this->assertFalse( $store->readable( 'gdrive' ) );
+			$this->assertCount( 1, $store->problems( array( 'gdrive' ) ) );
+			try {
+				$store->update(
+					'gdrive',
+					function ( array $data ) {
+						return array( 'token' => 'replaced' );
+					}
+				);
+				$this->fail( 'update() must refuse to replace a document it cannot read' );
+			} catch ( \RuntimeException $e ) {
+				$this->assertStringContainsString( 'cannot be read', $e->getMessage() );
+			}
+		} finally {
+			chmod( $store->path( 'gdrive' ), 0644 );
+		}
+		$this->assertSame( array( 'token' => 'keep me' ), $store->read( 'gdrive' ) );
+	}
+
 	/* ------------------------------------------------------------------
 	 * History
 	 * ------------------------------------------------------------------ */

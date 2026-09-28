@@ -70,11 +70,46 @@ class BackupManager {
 		add_action( 'shcm_worker', array( $this, 'reconcile' ), 5 );
 		add_action( 'shcm_cleanup', array( $this, 'reconcile' ), 5 );
 		add_action( 'admin_init', array( $this, 'reconcile' ) );
-		add_action( 'shcm_job_completed', array( $this, 'onJobCompleted' ) );
-		add_action( 'shcm_job_failed', array( $this, 'onJobFailed' ), 10, 2 );
-		add_action( 'shcm_job_cancelled', array( $this, 'onJobCancelled' ) );
+		// The job itself is finished and saved by now; a failure to record it
+		// (history file unwritable, mail error) must not escape into the
+		// request that finished it.
+		add_action(
+			'shcm_job_completed',
+			function ( $job ) {
+				$this->safely( 'onJobCompleted', $job );
+			}
+		);
+		add_action(
+			'shcm_job_failed',
+			function ( $job, $error = array() ) {
+				$this->safely( 'onJobFailed', $job, $error );
+			},
+			10,
+			2
+		);
+		add_action(
+			'shcm_job_cancelled',
+			function ( $job ) {
+				$this->safely( 'onJobCancelled', $job );
+			}
+		);
 		add_filter( 'shcm_job_password', array( $this, 'jobPassword' ), 10, 2 );
 		$this->runner()->register();
+	}
+
+	/**
+	 * Call a job event handler, logging instead of throwing.
+	 *
+	 * @param string $method Handler.
+	 * @param mixed  ...$args Arguments.
+	 * @return void
+	 */
+	protected function safely( $method, ...$args ) {
+		try {
+			$this->$method( ...$args );
+		} catch ( \Throwable $e ) {
+			$this->plugin->logger()->channel( 'plugin' )->error( sprintf( 'Backup bookkeeping (%s) failed: %s', $method, $e->getMessage() ) );
+		}
 	}
 
 	/* ------------------------------------------------------------------
@@ -337,6 +372,11 @@ class BackupManager {
 		if ( ! function_exists( 'wp_next_scheduled' ) ) {
 			return;
 		}
+		if ( ! $this->configReadable() ) {
+			// The schedule exists but this process cannot read it: leave the
+			// event alone rather than treat the site as unscheduled.
+			return;
+		}
 		$config = $this->config();
 		$active = 'manual' !== $config['frequency'] && $this->identityMatches() && $this->isMainSite();
 
@@ -401,9 +441,17 @@ class BackupManager {
 	 * @return Job|null The job started, or null.
 	 */
 	public function startScheduled( $from_event = false ) {
+		$logger = $this->plugin->logger()->channel( 'plugin' );
+		if ( ! $this->configReadable() ) {
+			$logger->error( 'Scheduled backup not started: ' . implode( ' ', $this->storageProblems() ) );
+			if ( $from_event && function_exists( 'wp_schedule_single_event' ) && false === wp_next_scheduled( self::HOOK ) ) {
+				// Try again later instead of losing the run.
+				wp_schedule_single_event( time() + self::DEFER_SECONDS, self::HOOK );
+			}
+			return null;
+		}
 		$config = $this->config();
 		$state  = $this->state();
-		$logger = $this->plugin->logger()->channel( 'plugin' );
 
 		if ( 'manual' === $config['frequency'] || ! $this->identityMatches() || ! $this->isMainSite() ) {
 			// An event left behind by an import or by an older schedule.
@@ -999,7 +1047,29 @@ class BackupManager {
 			'timezone'     => $this->timezone()->getName(),
 			'drive'        => $this->connection()->status(),
 			'main_site'    => $this->isMainSite(),
+			'problems'     => $this->storageProblems(),
 		);
+	}
+
+	/**
+	 * Whether this process can read the stored schedule and connection.
+	 *
+	 * @return bool
+	 */
+	public function configReadable() {
+		$store = $this->store();
+		return $store->readable( self::DOCUMENT ) && $store->readable( Connection::DOCUMENT ) && $store->readable( History::DOCUMENT );
+	}
+
+	/**
+	 * What stops this process from using the stored configuration (files
+	 * written by WP-CLI under another system account, a directory it cannot
+	 * write to), as sentences for the admin.
+	 *
+	 * @return string[]
+	 */
+	public function storageProblems() {
+		return $this->store()->problems( array( self::DOCUMENT, Connection::DOCUMENT, History::DOCUMENT ) );
 	}
 
 	/**

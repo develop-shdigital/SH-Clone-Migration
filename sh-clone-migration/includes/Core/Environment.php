@@ -564,6 +564,12 @@ class Environment {
 		}
 		$warnings = array();
 		$config   = $summary['config'];
+		foreach ( isset( $summary['problems'] ) ? (array) $summary['problems'] : array() as $problem ) {
+			$warnings[] = array(
+				'level'   => 'error',
+				'message' => __( 'Scheduled backups:', 'sh-clone-migration' ) . ' ' . $problem,
+			);
+		}
 		if ( 'reconnect' === $summary['drive']['state'] ) {
 			$warnings[] = array(
 				'level'   => 'error',

@@ -147,8 +147,11 @@ class BackupController {
 		if ( $connection->credentialsFromConstants() ) {
 			throw new \InvalidArgumentException( __( 'The client ID and secret are set in wp-config.php and cannot be changed here.', 'sh-clone-migration' ) );
 		}
-		$client_id     = trim( (string) $client_id );
-		$client_secret = trim( (string) $client_secret );
+		// A field set by a wp-config.php constant is locked in the form (it
+		// posts nothing); the constant's value is the one that counts.
+		$locked        = $connection->constantFields();
+		$client_id     = $locked['client_id'] ? (string) $connection->clientId() : trim( (string) $client_id );
+		$client_secret = $locked['client_secret'] ? (string) $connection->clientSecret() : trim( (string) $client_secret );
 		if ( ! preg_match( '/^[A-Za-z0-9._\-]{8,200}$/', $client_id ) ) {
 			throw new \InvalidArgumentException( __( 'That does not look like a Google OAuth client ID (it ends in .apps.googleusercontent.com).', 'sh-clone-migration' ) );
 		}
@@ -342,20 +345,23 @@ class BackupController {
 	public function driveStatus( $about = null ) {
 		$connection = $this->backups()->connection();
 		$status     = $connection->status();
+		$constants  = $connection->constantFields();
 		$redirect   = self::redirectUri();
 		return array(
-			'state'          => $status['state'],
-			'account'        => (string) $status['account'],
-			'folder'         => (string) $status['folder_name'],
-			'folder_id'      => (string) $status['folder_id'],
-			'connected_at'   => (int) $status['connected_at'],
-			'error'          => (string) $status['error'],
-			'client_id'      => (string) $connection->clientId(),
-			'has_secret'     => '' !== (string) $connection->clientSecret(),
-			'from_constants' => $connection->credentialsFromConstants(),
-			'redirect_uri'   => $redirect,
-			'https'          => 0 === strpos( $redirect, 'https://' ) || (bool) preg_match( '#^http://(localhost|127\.0\.0\.1)(:\d+)?/#', $redirect ),
-			'quota'          => is_array( $about ) ? array(
+			'state'           => $status['state'],
+			'account'         => (string) $status['account'],
+			'folder'          => (string) $status['folder_name'],
+			'folder_id'       => (string) $status['folder_id'],
+			'connected_at'    => (int) $status['connected_at'],
+			'error'           => (string) $status['error'],
+			'client_id'       => (string) $connection->clientId(),
+			'has_secret'      => '' !== (string) $connection->clientSecret(),
+			'from_constants'  => $connection->credentialsFromConstants(),
+			'id_constant'     => $constants['client_id'],
+			'secret_constant' => $constants['client_secret'],
+			'redirect_uri'    => $redirect,
+			'https'           => 0 === strpos( $redirect, 'https://' ) || (bool) preg_match( '#^http://(localhost|127\.0\.0\.1)(:\d+)?/#', $redirect ),
+			'quota'           => is_array( $about ) ? array(
 				'limit' => $about['limit'],
 				'usage' => (int) $about['usage'],
 			) : null,

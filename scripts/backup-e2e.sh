@@ -29,7 +29,9 @@ PASS=0
 FAIL=0
 
 wpc() { ( cd "$ROOT" && wp --allow-root "$@" 2>/dev/null | grep -vE '^PHP|^\s|^#|^\)|^Deprecated' ); }
-wpe() { ( cd "$ROOT" && wp --allow-root eval "$1" 2>/dev/null | grep -vE '^PHP|^  |^#|^\)\]|^Deprecated|^.,$' ); }
+# The newline keeps a notice printed by another plugin at shutdown (Elementor)
+# off the line that carries the value.
+wpe() { ( cd "$ROOT" && wp --allow-root eval "$1; echo PHP_EOL;" 2>/dev/null | grep -vE '^PHP|^  |^#|^\)\]|^Deprecated|^.,$|^$' ); }
 check() {
 	if [ "$2" = "0" ]; then PASS=$((PASS + 1)); printf '  PASS  %s\n' "$1"
 	else FAIL=$((FAIL + 1)); printf '  FAIL  %s  %s\n' "$1" "${3:-}"; fi
@@ -72,6 +74,9 @@ mkdir -p "$ROOT/wp-content/mu-plugins"
 cp "$PLUGIN/tests/wordpress/backup-test-mu.php" "$ROOT/wp-content/mu-plugins/shcm-backup-test.php"
 chown -R www-data:www-data "$ROOT/wp-content/plugins/sh-clone-migration" "$ROOT/wp-content/mu-plugins" 2>/dev/null
 rm -f "$ROOT/wp-content/shcm-test-mail.log"
+# Background requests run as the web server user, which may not be allowed to
+# create files in wp-content.
+touch "$ROOT/wp-content/shcm-test-mail.log" && chmod 666 "$ROOT/wp-content/shcm-test-mail.log"
 rm -rf "$ROOT/wp-content/shcm-storage/config"
 rm -f "$ROOT"/wp-content/shcm-storage/archives/*.wpress "$ROOT"/wp-content/shcm-storage/archives/*.wpress.sha256
 for c in AUTH:o/oauth2/v2/auth TOKEN:token REVOKE:revoke API:drive/v3 UPLOAD:upload/drive/v3; do
@@ -91,7 +96,7 @@ is "feature available (all parts present)" "$avail" "bool(true)"
 curl -s -o /dev/null -c "$JAR" -b "$JAR" -H "$H" "$BASE/wp-login.php"
 curl -s -o /dev/null -c "$JAR" -b "$JAR" -H "$H" --data "log=$USER_NAME&pwd=$USER_PASS&wp-submit=Log+In&testcookie=1" "$BASE/wp-login.php"
 PAGE=$(curl -s -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm-schedules")
-NONCE=$(echo "$PAGE" | grep -o '"nonce":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)
+NONCE=$(echo "$PAGE" | grep -o 'var shcmData = {[^;]*' | grep -o '"nonce":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)
 [ -n "$NONCE" ] && check "Scheduled Backups screen loads (nonce found)" 0 || check "Scheduled Backups screen loads" 1 "$(echo "$PAGE" | grep -o 'critical error' | head -1)"
 
 echo
@@ -152,8 +157,10 @@ echo
 echo "--- 4. Scheduled runs through WP-Cron over HTTP -----------------"
 wpc option update shcm_test_chunk 262144 >/dev/null
 run_scheduled() {
-	wpe '$m = shcm_bootstrap()->backups(); $s = (new \SHCM\Backup\ConfigStore(shcm_bootstrap()->storage()->config()))->update("schedule", function($d){ $d["state"]["next_run"] = time() - 5; return $d; }); wp_unschedule_hook("shcm_scheduled_backup"); wp_schedule_single_event(time() - 5, "shcm_scheduled_backup");' >/dev/null
-	curl -s -o /dev/null -H "$H" "$BASE/wp-cron.php?doing_wp_cron=$(date +%s).0" --max-time 120
+	wpe '$m = shcm_bootstrap()->backups(); $s = (new \SHCM\Backup\ConfigStore(shcm_bootstrap()->storage()->config()))->update("schedule", function($d){ $d["state"]["next_run"] = time() - 5; return $d; }); wp_unschedule_hook("shcm_scheduled_backup"); wp_schedule_single_event(time() - 5, "shcm_scheduled_backup"); delete_transient("doing_cron");' >/dev/null
+	# Without doing_wp_cron: wp-cron.php only runs events for a caller whose
+	# value matches the lock it set itself.
+	curl -s -o /dev/null -H "$H" "$BASE/wp-cron.php" --max-time 120
 	local job
 	job=$(wpe 'echo shcm_bootstrap()->backups()->state()["last_job"];')
 	wait_job "$job" status 600 >/dev/null
@@ -238,7 +245,49 @@ ajax backup_adopt >/dev/null
 is "\"this is the same site\" resumes it" "$(wpe 'var_dump( (bool) wp_next_scheduled("shcm_scheduled_backup") );')" "bool(true)"
 
 echo
-echo "--- 9. No secret in logs, job files or plain config --------------"
+echo "--- 8b. Settings written by WP-CLI as another system user ---------"
+CFG="$ROOT/wp-content/shcm-storage/config"
+is "schedule written by WP-CLI (root) is readable by the web server" "$(stat -c %a "$CFG/schedule.php")" "644"
+chmod 600 "$CFG/schedule.php"; chown root:root "$CFG/schedule.php"
+problems=$(ajax backup_status | jq -r '.data.schedule.problems | length')
+is "an unreadable schedule is reported on the screen" "$problems" "1"
+curl -s -o /dev/null -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm-schedules"
+is "and the scheduled event is left alone" "$(wpe 'var_dump( (bool) wp_next_scheduled("shcm_scheduled_backup") );')" "bool(true)"
+refused=$(ajax save_schedule 'schedule={"time":"04:00"}' | jq -r '.success')
+is "saving is refused instead of replacing the unreadable settings" "$refused" "false"
+chmod 644 "$CFG/schedule.php"
+is "the stored schedule survived" "$(wpc shcm backup schedule | grep -c 'Daily at 03:15')" "1"
+
+echo
+echo "--- 9. Manual archives: sent by hand, never pruned; keep 0 locally --"
+ajax save_schedule 'schedule={"keep_local":1,"keep_remote":1}' >/dev/null
+JOB9=$(run_scheduled)
+is "scheduled run with Drive: success" "$(history_field "$JOB9" .status)" "success"
+ARCH9=$(history_field "$JOB9" .archive)
+row=$(curl -s -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm-backups" | tr -d '\n' | grep -o "<tr data-archive=\"$ARCH9\">.*" | sed 's#</tr>.*##')
+echo "$row" | grep -q 'on Google Drive'; check "Backups screen marks the backup as on Google Drive" $?
+echo "$row" | grep -q 'data-action="gdrive"'; check "Backups screen offers \"Send to Google Drive\"" $?
+MAN=$(cd "$ROOT" && wp --allow-root shcm export --porcelain 2>/dev/null | grep wpress | tail -1)
+MANB=$(basename "$MAN")
+r=$(ajax backup_upload "archive=$MANB")
+UJ=$(echo "$r" | jq -r '.data.id')
+wait_job "$UJ" status 300 >/dev/null
+is "manual export uploaded by hand" "$(cat "$WORK/last-status")" "completed"
+mkind=$(fstate | jq -r --arg n "$MANB" '[.files[] | select(.name==$n and (.trashed|not))][0].appProperties.shcm_kind')
+is "its Drive copy is tagged as a manual archive" "$mkind" "manual"
+ajax save_schedule 'schedule={"keep_local":0,"keep_remote":1}' >/dev/null
+JOB10=$(run_scheduled)
+is "keep 0 on this server: backup succeeds" "$(history_field "$JOB10" .status)" "success"
+ARCH10=$(history_field "$JOB10" .archive)
+[ -n "$ARCH10" ] && [ ! -f "$ROOT/wp-content/shcm-storage/archives/$ARCH10" ]; check "the verified backup is deleted locally" $?
+is "history says it is on Drive only" "$(history_field "$JOB10" .local.kept)" "false"
+is "retention keeps 1 backup on Drive" "$(fstate | jq '[.files[] | select(.appProperties.shcm_kind=="backup" and (.trashed|not))] | length')" "1"
+is "the manual archive stays on Drive" "$(fstate | jq --arg n "$MANB" '[.files[] | select(.name==$n and (.trashed|not))] | length')" "1"
+[ -f "$MAN" ]; check "the manual archive stays on this server" $?
+ajax save_schedule 'schedule={"keep_local":1,"keep_remote":2}' >/dev/null
+
+echo
+echo "--- 10. No secret in logs, job files or plain config -------------"
 leaks=$(grep -rlE 'ya29\.fake|1//fake|GOCSPX-fake|upload_id=[A-Za-z0-9]' "$ROOT/wp-content/shcm-storage/logs" "$ROOT/wp-content/shcm-storage/jobs" "$ROOT/wp-content/shcm-storage/config" 2>/dev/null | wc -l)
 is "files containing a token, secret or session URI" "$leaks" "0"
 dbleak=$(cd "$ROOT" && wp --allow-root db query "SELECT COUNT(*) FROM $(wp --allow-root db prefix 2>/dev/null)options WHERE option_value LIKE '%fake-secret%' OR option_value LIKE '%1//fake%'" --skip-column-names 2>/dev/null)

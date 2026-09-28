@@ -1039,6 +1039,22 @@
 
 				if ( button.getAttribute( 'data-action' ) === 'verify' ) {
 					verifyArchive( archive, row, button );
+					return;
+				}
+
+				if ( button.getAttribute( 'data-action' ) === 'gdrive' ) {
+					if ( ! window.confirm( strings.confirmSendDrive ) ) {
+						return;
+					}
+					button.disabled = true;
+					// The upload runs in the background; the Scheduled Backups
+					// screen picks the running job up and shows its progress.
+					api( 'backup_upload', { archive: archive } ).then( function () {
+						window.location.href = strings.schedulesUrl;
+					} ).catch( function ( error ) {
+						button.disabled = false;
+						window.alert( error.message );
+					} );
 				}
 			} );
 		}
@@ -1252,6 +1268,7 @@
 			return;
 		}
 
+		var L = strings.sched || {};
 		var status = {};
 		try {
 			status = JSON.parse( dataNode.textContent );
@@ -1292,6 +1309,16 @@
 			return '<span class="shcm-tag' + ( tone ? ' shcm-tag--' + tone : '' ) + '">' + escapeHtml( text ) + '</span>';
 		}
 
+		// Replace %s, %1$s and %2$s in a translated string.
+		function fmt( text ) {
+			var args = Array.prototype.slice.call( arguments, 1 );
+			var next = 0;
+			return String( text || '' ).replace( /%(?:(\d)\$)?s/g, function ( match, position ) {
+				var value = position ? args[ position - 1 ] : args[ next++ ];
+				return value === undefined ? '' : String( value );
+			} );
+		}
+
 		function alertBox( level, html, action ) {
 			return '<div class="shcm-alert shcm-alert--' + level + '">' + html +
 				( action ? ' ' + action : '' ) + '</div>';
@@ -1317,21 +1344,21 @@
 			var last = schedule.last;
 			var next;
 			if ( ! schedule.identity_ok ) {
-				next = 'Paused';
+				next = L.paused;
 			} else if ( ( schedule.config || {} ).frequency === 'manual' ) {
-				next = 'On demand';
+				next = L.onDemand;
 			} else {
 				next = status.next_text || '—';
 			}
 			var lastText = '—';
 			if ( last ) {
-				lastText = ( { success: 'OK', partial: 'Not uploaded', failed: 'Failed', skipped: 'Skipped', cancelled: 'Cancelled' }[ last.status ] || last.status );
+				lastText = ( { success: L.statusOk, partial: L.statusPartial, failed: L.statusFailed, skipped: L.statusSkipped, cancelled: L.statusCancelled }[ last.status ] || last.status );
 			}
 			var tiles = [
 				[ next, schedule.describe || '' ],
-				[ lastText, last ? 'Last backup' : 'No backup yet', last && ( last.status === 'failed' || last.status === 'partial' ) ],
-				[ formatNumber( local.length ) + ' · ' + formatBytes( localBytes ), 'Kept on this server' ],
-				[ drive.state === 'connected' ? formatNumber( remote.length ) + ' on Drive' : ( drive.state === 'reconnect' ? 'Reconnect' : 'Not connected' ), 'Google Drive', drive.state === 'reconnect' ]
+				[ lastText, last ? L.lastBackup : L.noBackupYet, last && ( last.status === 'failed' || last.status === 'partial' ) ],
+				[ formatNumber( local.length ) + ' · ' + formatBytes( localBytes ), L.keptHere ],
+				[ drive.state === 'connected' ? fmt( L.onDrive, formatNumber( remote.length ) ) : ( drive.state === 'reconnect' ? L.reconnectShort : L.notConnected ), L.googleDrive, drive.state === 'reconnect' ]
 			];
 			$( '#shcm-schedule-stats' ).innerHTML = tiles.map( function ( tile ) {
 				return '<div class="shcm-stat' + ( tile[ 2 ] ? ' shcm-stat--warn' : '' ) + '">' +
@@ -1344,33 +1371,36 @@
 			var config = schedule.config || {};
 			var cron = schedule.cron || {};
 			var html = '';
+			( schedule.problems || [] ).forEach( function ( problem ) {
+				html += alertBox( 'error', escapeHtml( problem ) );
+			} );
 			if ( ! schedule.main_site ) {
-				html += alertBox( 'info', 'Backups cover the whole network and are managed on the main site only.' );
+				html += alertBox( 'info', escapeHtml( L.networkOnly ) );
 			}
 			if ( ! schedule.identity_ok ) {
-				html += alertBox( 'warning', '<strong>This schedule was set up on another copy of this site</strong> (the site was moved or cloned). It is paused here so that a copy never backs up into, or deletes from, the original site\'s storage.',
-					'<button type="button" class="button button-small" data-action="adopt">This is the same site: resume backups</button>' );
+				html += alertBox( 'warning', '<strong>' + escapeHtml( L.identityTitle ) + '</strong> ' + escapeHtml( L.identityBody ),
+					'<button type="button" class="button button-small" data-action="adopt">' + escapeHtml( L.adoptResume ) + '</button>' );
 			}
 			if ( drive.state === 'reconnect' ) {
-				html += alertBox( 'error', '<strong>Google Drive needs to be reconnected.</strong> ' + escapeHtml( drive.error || '' ),
-					'<button type="button" class="button button-small" data-action="connect">Reconnect</button>' );
+				html += alertBox( 'error', '<strong>' + escapeHtml( L.reconnectTitle ) + '</strong> ' + escapeHtml( drive.error || '' ),
+					'<button type="button" class="button button-small" data-action="connect">' + escapeHtml( L.reconnectShort ) + '</button>' );
 			} else if ( drive.state === 'other_site' ) {
-				html += alertBox( 'warning', 'The Google Drive connection belongs to another copy of this site. Confirm this is the same site, or disconnect and connect this site\'s own account.',
-					'<button type="button" class="button button-small" data-action="adopt">This is the same site</button>' );
+				html += alertBox( 'warning', escapeHtml( L.driveOtherSite ),
+					'<button type="button" class="button button-small" data-action="adopt">' + escapeHtml( L.adoptShort ) + '</button>' );
 			} else if ( config.gdrive && drive.state !== 'connected' ) {
-				html += alertBox( 'warning', 'Backups are set to go to Google Drive, but Google Drive is not connected. They are kept on this server until it is.' );
+				html += alertBox( 'warning', escapeHtml( L.driveNotConnected ) );
 			}
 			if ( config.encrypt && ! schedule.has_password ) {
-				html += alertBox( 'error', 'Encrypted backups are on, but no readable password is stored (wp-config.php may have changed). Enter the password again and save.' );
+				html += alertBox( 'error', escapeHtml( L.noPassword ) );
 			}
 			if ( schedule.overdue ) {
-				html += alertBox( 'warning', 'The last scheduled backup is overdue. WP-Cron only runs when the site has visitors; see the note about a system cron job below.' );
+				html += alertBox( 'warning', escapeHtml( L.overdue ) );
 			}
 			if ( cron.disabled ) {
-				html += alertBox( 'info', 'WP-Cron is disabled on this site (DISABLE_WP_CRON). Scheduled backups run only if a system cron job runs <code>wp shcm backup run</code> (or wp-cron.php) regularly.' );
+				html += alertBox( 'info', fmt( escapeHtml( L.cronDisabled ), '<code>wp shcm backup run</code>' ) );
 			}
 			if ( cron.loopback_blocked ) {
-				html += alertBox( 'warning', 'This site cannot call itself (loopback requests are blocked, for example by HTTP authentication). Backups still run, but only one step per minute through WP-Cron, so they take much longer.' );
+				html += alertBox( 'warning', escapeHtml( L.loopbackBlocked ) );
 			}
 			$( '#shcm-schedule-alerts' ).innerHTML = html;
 		}
@@ -1383,24 +1413,24 @@
 			var buttons = '';
 			if ( drive.state === 'connected' ) {
 				html = '<table class="widefat shcm-summary"><tbody>' +
-					'<tr><th scope="row">Account</th><td>' + escapeHtml( drive.account || '—' ) + '</td></tr>' +
-					'<tr><th scope="row">Folder</th><td>' + escapeHtml( drive.folder || 'Created at the first upload' ) + '</td></tr>' +
-					( drive.quota ? '<tr><th scope="row">Storage</th><td>' + formatBytes( drive.quota.usage ) + ' used' + ( drive.quota.limit ? ' of ' + formatBytes( drive.quota.limit ) : '' ) + '</td></tr>' : '' ) +
+					'<tr><th scope="row">' + escapeHtml( L.account ) + '</th><td>' + escapeHtml( drive.account || '—' ) + '</td></tr>' +
+					'<tr><th scope="row">' + escapeHtml( L.folder ) + '</th><td>' + escapeHtml( drive.folder || L.folderLater ) + '</td></tr>' +
+					( drive.quota ? '<tr><th scope="row">' + escapeHtml( L.storage ) + '</th><td>' + escapeHtml( drive.quota.limit ? fmt( L.usedOf, formatBytes( drive.quota.usage ), formatBytes( drive.quota.limit ) ) : fmt( L.used, formatBytes( drive.quota.usage ) ) ) + '</td></tr>' : '' ) +
 					'</tbody></table>';
-				buttons = '<button type="button" class="button" data-action="test">Test connection</button>' +
-					'<button type="button" class="button" data-action="list">Show backups on Drive</button>' +
-					'<button type="button" class="button button-link-delete" data-action="disconnect">Disconnect</button>';
+				buttons = '<button type="button" class="button" data-action="test">' + escapeHtml( L.testConnection ) + '</button>' +
+					'<button type="button" class="button" data-action="list">' + escapeHtml( L.showOnDrive ) + '</button>' +
+					'<button type="button" class="button button-link-delete" data-action="disconnect">' + escapeHtml( L.disconnect ) + '</button>';
 				setup.classList.add( 'shcm-hidden' );
 			} else {
 				if ( drive.state === 'reconnect' ) {
-					html = alertBox( 'error', escapeHtml( drive.error || 'The connection stopped working.' ) );
+					html = alertBox( 'error', escapeHtml( drive.error || L.connectionStopped ) );
 				} else if ( drive.state === 'other_site' ) {
-					html = alertBox( 'warning', 'Connected on another copy of this site.' );
+					html = alertBox( 'warning', escapeHtml( L.connectedElsewhere ) );
 				} else {
-					html = '<p>Not connected. Follow the steps below once; afterwards backups upload automatically.</p>';
+					html = '<p>' + escapeHtml( L.notConnectedLong ) + '</p>';
 				}
 				if ( drive.state === 'reconnect' || drive.state === 'other_site' ) {
-					buttons = '<button type="button" class="button button-link-delete" data-action="disconnect">Disconnect</button>';
+					buttons = '<button type="button" class="button button-link-delete" data-action="disconnect">' + escapeHtml( L.disconnect ) + '</button>';
 				}
 				setup.classList.remove( 'shcm-hidden' );
 			}
@@ -1408,12 +1438,12 @@
 			actions.innerHTML = buttons;
 			var connect = $( '#shcm-gdrive-connect' );
 			if ( connect ) {
-				connect.textContent = drive.state === 'reconnect' || drive.state === 'other_site' ? 'Reconnect Google Drive' : 'Connect Google Drive';
+				connect.textContent = drive.state === 'reconnect' || drive.state === 'other_site' ? L.reconnectDrive : L.connectDrive;
 			}
 		}
 
 		function statusPill( row ) {
-			var map = { success: [ 'completed', 'OK' ], partial: [ 'partial', 'Not uploaded' ], failed: [ 'failed', 'Failed' ], running: [ 'running', 'Running' ], skipped: [ 'cancelled', 'Skipped' ], cancelled: [ 'cancelled', 'Cancelled' ] };
+			var map = { success: [ 'completed', L.statusOk ], partial: [ 'partial', L.statusPartial ], failed: [ 'failed', L.statusFailed ], running: [ 'running', L.statusRunning ], skipped: [ 'cancelled', L.statusSkipped ], cancelled: [ 'cancelled', L.statusCancelled ] };
 			var entry = map[ row.status ] || [ 'pending', row.status || '?' ];
 			return '<span class="shcm-status shcm-status--' + entry[ 0 ] + '">' + escapeHtml( entry[ 1 ] ) + '</span>';
 		}
@@ -1422,14 +1452,14 @@
 			var remote = row.remote || {};
 			switch ( remote.status ) {
 				case 'uploaded':
-					return tag( 'Uploaded', 'ok' ) + ( remote.link ? ' <a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">Open</a>' : '' );
+					return tag( L.uploaded, 'ok' ) + ( remote.link ? ' <a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml( L.open ) + '</a>' : '' );
 				case 'pending':
-					return tag( 'Uploading' );
+					return tag( L.uploadingTag );
 				case 'deleted':
-					return tag( 'Removed (retention)' );
+					return tag( L.removedRetention );
 				case 'failed':
-					return tag( 'Failed', 'danger' ) + ( remote.error ? '<br><span class="description">' + escapeHtml( remote.error ) + '</span>' : '' ) +
-						( row.present ? '<br><button type="button" class="button button-small" data-action="retry" data-history="' + escapeHtml( row.id ) + '">Retry upload</button>' : '' );
+					return tag( L.statusFailed, 'danger' ) + ( remote.error ? '<br><span class="description">' + escapeHtml( remote.error ) + '</span>' : '' ) +
+						( row.present ? '<br><button type="button" class="button button-small" data-action="retry" data-history="' + escapeHtml( row.id ) + '">' + escapeHtml( L.retryUpload ) + '</button>' : '' );
 				case 'off':
 				case undefined:
 					return '—';
@@ -1441,27 +1471,29 @@
 		function renderHistory( rows ) {
 			var box = $( '#shcm-schedule-history' );
 			if ( ! rows.length ) {
-				box.innerHTML = '<p class="shcm-empty">No backups yet. Click "Back Up Now" or set a schedule.</p>';
+				box.innerHTML = '<p class="shcm-empty">' + escapeHtml( L.noHistory ) + '</p>';
 				return;
 			}
-			var labels = { schedule: 'Schedule', manual: 'Back up now', cli: 'WP-CLI' };
-			var contents = { full: 'Database + files', database: 'Database', files: 'Files' };
+			var labels = { schedule: L.triggerSchedule, manual: L.triggerManual, cli: L.triggerCli };
+			var contents = { full: L.contentsFull, database: L.contentsDatabase, files: L.contentsFiles };
 			box.innerHTML = '<div class="shcm-table-scroll"><table class="widefat striped shcm-table" id="shcm-schedule-history-table"><thead><tr>' +
-				'<th>Date</th><th>Started by</th><th>Status</th><th>Contents</th><th>Size</th><th>This server</th><th>Google Drive</th><th></th>' +
+				[ L.colDate, L.colStartedBy, L.colStatus, L.colContents, L.colSize, L.colServer, L.colDrive, '' ].map( function ( label ) {
+					return '<th>' + escapeHtml( label ) + '</th>';
+				} ).join( '' ) +
 				'</tr></thead><tbody>' + rows.map( function ( row ) {
 					var local = row.present
-						? tag( 'Kept', 'ok' ) + ( row.download ? ' <a href="' + escapeHtml( row.download ) + '">Download</a>' : '' )
-						: ( row.status === 'success' || row.status === 'partial' ? tag( 'Removed (retention)' ) : '—' );
+						? tag( L.kept, 'ok' ) + ( row.download ? ' <a href="' + escapeHtml( row.download ) + '">' + escapeHtml( L.download ) + '</a>' : '' )
+						: ( row.status === 'success' || row.status === 'partial' ? tag( L.removedRetention ) : '—' );
 					return '<tr data-job="' + escapeHtml( row.id ) + '">' +
 						'<td>' + escapeHtml( row.date ) + '</td>' +
 						'<td>' + escapeHtml( labels[ row.trigger ] || row.trigger || '' ) + '</td>' +
 						'<td>' + statusPill( row ) + ( row.error && row.status !== 'partial' ? '<br><span class="description">' + escapeHtml( row.error ) + '</span>' : '' ) +
-						( row.warnings ? '<br><span class="description">' + formatNumber( row.warnings ) + ' warning(s)</span>' : '' ) + '</td>' +
-						'<td>' + escapeHtml( contents[ row.contents ] || row.contents || '' ) + ( row.encrypted ? ' ' + tag( 'encrypted', 'lock' ) : '' ) + '</td>' +
+						( row.warnings ? '<br><span class="description">' + escapeHtml( fmt( row.warnings === 1 ? L.warningOne : L.warningMany, formatNumber( row.warnings ) ) ) + '</span>' : '' ) + '</td>' +
+						'<td>' + escapeHtml( contents[ row.contents ] || row.contents || '' ) + ( row.encrypted ? ' ' + tag( L.encrypted, 'lock' ) : '' ) + '</td>' +
 						'<td>' + ( row.size ? formatBytes( row.size ) : '—' ) + '</td>' +
 						'<td>' + local + '</td>' +
 						'<td>' + driveCell( row ) + '</td>' +
-						'<td class="shcm-actions">' + ( row.job ? '<a class="button button-small" href="' + escapeHtml( data.logUrl + '&job_id=' + encodeURIComponent( row.job ) ) + '">Log</a>' : '' ) + '</td>' +
+						'<td class="shcm-actions">' + ( row.job ? '<a class="button button-small" href="' + escapeHtml( data.logUrl + '&job_id=' + encodeURIComponent( row.job ) ) + '">' + escapeHtml( L.log ) + '</a>' : '' ) + '</td>' +
 						'</tr>';
 				} ).join( '' ) + '</tbody></table></div>';
 		}
@@ -1500,14 +1532,14 @@
 				} else {
 					html += '<div class="shcm-alert shcm-alert--success"><strong>' +
 						escapeHtml( report.archive ? strings.backupDone : strings.uploadDone ) + '.</strong>' +
-						( remote && remote.status === 'uploaded' ? ' Uploaded to Google Drive and verified' + ( remote.link ? ' (<a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">open</a>)' : '' ) + '.' : '' ) +
+						( remote && remote.status === 'uploaded' ? ' ' + escapeHtml( L.uploadedVerified ) + ( remote.link ? ' <a href="' + escapeHtml( remote.link ) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml( L.openInDrive ) + '</a>' : '' ) : '' ) +
 						'</div>';
 				}
 				if ( report.archive_size ) {
 					html += renderArchiveSummary( job );
 				}
 			} else if ( job.status === 'cancelled' ) {
-				html += '<div class="shcm-alert shcm-alert--warning">Cancelled.</div>';
+				html += '<div class="shcm-alert shcm-alert--warning">' + escapeHtml( L.cancelled ) + '</div>';
 			} else {
 				html += '<div class="shcm-alert shcm-alert--error"><strong>' + escapeHtml( strings.backupFailed || '' ) + ':</strong> ' +
 					escapeHtml( job.error && job.error.message ? job.error.message : '' ) + '</div>';
@@ -1551,7 +1583,7 @@
 					confirm.value = '';
 				}
 				render();
-				feedback( node, strings.saved + ( status.next_text ? ' Next backup: ' + status.next_text + '.' : '' ) );
+				feedback( node, strings.saved + ( status.next_text ? ' ' + fmt( L.nextBackup, status.next_text ) : '' ) );
 			} ).catch( function ( error ) {
 				feedback( node, error.message, true );
 			} );
@@ -1659,16 +1691,16 @@
 			api( 'gdrive_list', {} ).then( function ( result ) {
 				button.disabled = false;
 				if ( ! result.files.length ) {
-					box.innerHTML = '<p class="shcm-empty">No backups of this site on Google Drive yet.</p>';
+					box.innerHTML = '<p class="shcm-empty">' + escapeHtml( L.noDriveFiles ) + '</p>';
 					return;
 				}
-				box.innerHTML = '<div class="shcm-table-scroll"><table class="widefat striped shcm-table"><thead><tr><th>Name</th><th>Date</th><th>Size</th><th></th></tr></thead><tbody>' +
+				box.innerHTML = '<div class="shcm-table-scroll"><table class="widefat striped shcm-table"><thead><tr><th>' + escapeHtml( L.colName ) + '</th><th>' + escapeHtml( L.colDate ) + '</th><th>' + escapeHtml( L.colSize ) + '</th><th></th></tr></thead><tbody>' +
 					result.files.map( function ( file ) {
-						return '<tr><td><code>' + escapeHtml( file.name ) + '</code>' + ( file.kind === 'manual' ? ' ' + tag( 'sent by hand' ) : '' ) + '</td>' +
+						return '<tr><td><code>' + escapeHtml( file.name ) + '</code>' + ( file.kind === 'manual' ? ' ' + tag( L.sentByHand ) : '' ) + '</td>' +
 							'<td>' + escapeHtml( file.date ) + '</td><td>' + formatBytes( file.size ) + '</td>' +
-							'<td class="shcm-actions">' + ( file.link ? '<a class="button button-small" href="' + escapeHtml( file.link ) + '" target="_blank" rel="noopener noreferrer">Open in Drive</a>' : '' ) + '</td></tr>';
+							'<td class="shcm-actions">' + ( file.link ? '<a class="button button-small" href="' + escapeHtml( file.link ) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml( L.openInDrive ) + '</a>' : '' ) + '</td></tr>';
 					} ).join( '' ) + '</tbody></table></div>' +
-					'<p class="description">To restore one of these, download it from Google Drive and upload it on the Import screen.</p>';
+					'<p class="description">' + escapeHtml( L.restoreHint ) + '</p>';
 			} ).catch( function ( error ) {
 				button.disabled = false;
 				box.innerHTML = '<div class="shcm-alert shcm-alert--error">' + escapeHtml( error.message ) + '</div>';

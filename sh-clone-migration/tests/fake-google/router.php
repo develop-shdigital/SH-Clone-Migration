@@ -1027,6 +1027,26 @@ final class DriveQuery {
 final class Server {
 
 	/**
+	 * /__control keys that set one config value each.
+	 */
+	const CONFIG_KEYS = array( 'client_id', 'client_secret', 'email', 'name', 'redirect_uris', 'publishing_status', 'access_token_ttl', 'max_upload_size' );
+
+	/**
+	 * /__control keys that set a boolean control.
+	 */
+	const FLAG_KEYS = array( 'omit_refresh_token', 'deny_next_consent', 'deny_drive_scope_next_consent', 'rotate_refresh_tokens' );
+
+	/**
+	 * /__control keys that trigger a one-shot action when true.
+	 */
+	const ACTION_KEYS = array( 'reset', 'clear_faults', 'expire_access_tokens', 'revoke_all', 'expire_sessions', 'clear_log' );
+
+	/**
+	 * The remaining /__control keys.
+	 */
+	const OTHER_KEYS = array( 'config', 'fail', 'quota', 'chunk_commit_limit', 'chunk_commit_times', 'short_pages', 'short_pages_times', 'require_content_length', 'advance_time' );
+
+	/**
 	 * Store.
 	 *
 	 * @var Store
@@ -1088,7 +1108,9 @@ final class Server {
 		$this->store->lock();
 		$loaded      = $this->store->load();
 		$this->state = null === $loaded ? $this->freshState() : $loaded;
-		$this->now   = microtime( true ) + (float) $this->state['clock_offset'];
+		// The state survives restarts, so a state.json written by an older router.php may lack newer controls.
+		$this->state['controls'] = array_merge( self::defaultControls(), isset( $this->state['controls'] ) ? (array) $this->state['controls'] : array() );
+		$this->now               = microtime( true ) + (float) $this->state['clock_offset'];
 		try {
 			$resp = $this->handle();
 		} catch ( \Throwable $e ) {
@@ -1103,6 +1125,25 @@ final class Server {
 	}
 
 	/**
+	 * Control values of a fresh (or reset) state.
+	 *
+	 * @return array
+	 */
+	private static function defaultControls() {
+		return array(
+			'omit_refresh_token'            => false,
+			'deny_next_consent'             => false,
+			'deny_drive_scope_next_consent' => false,
+			'rotate_refresh_tokens'         => false,
+			'chunk_commit_limit'            => null,
+			'chunk_commit_times'            => 0,
+			'short_pages'                   => null,
+			'short_pages_times'             => 0,
+			'require_content_length'        => true,
+		);
+	}
+
+	/**
 	 * A brand-new state.
 	 *
 	 * @return array
@@ -1111,14 +1152,7 @@ final class Server {
 		return array(
 			'version'        => 1,
 			'config'         => default_config(),
-			'controls'       => array(
-				'omit_refresh_token'            => false,
-				'deny_next_consent'             => false,
-				'deny_drive_scope_next_consent' => false,
-				'rotate_refresh_tokens'         => false,
-				'chunk_commit_limit'            => null,
-				'chunk_commit_times'            => 0,
-			),
+			'controls'       => self::defaultControls(),
 			'clock_offset'   => 0,
 			'root_id'        => '0AFake' . random_token( 13, true ),
 			'faults'         => array(),
@@ -1226,6 +1260,9 @@ final class Server {
 			}
 		}
 		if ( '/upload/drive/v3/files' === $path ) {
+			if ( ( 'POST' === $method || 'PUT' === $method ) && $this->lengthMissing() ) {
+				return $this->lengthRequiredPage( $method );
+			}
 			if ( 'POST' === $method ) {
 				return $this->startUpload();
 			}
@@ -1249,6 +1286,33 @@ final class Server {
 	 */
 	private function notFoundPage() {
 		return html_response( 404, "<!DOCTYPE html>\n<html lang=en><meta charset=utf-8><title>Error 404 (Not Found)!!1</title><p><b>404.</b> <ins>That's an error.</ins><p>The requested URL <code>" . htmlspecialchars( $this->req['path'] ) . "</code> was not found on this server. <ins>That's all we know.</ins>\n" );
+	}
+
+	/**
+	 * Whether a body-carrying upload request has no length (require_content_length control).
+	 *
+	 * The research (checklist H) says status queries must send "Content-Length: 0", and WordPress's HTTP API (both
+	 * Requests transports) omits the header for an empty PUT body unless the caller sets it. A chunked body has a
+	 * defined length, so it passes.
+	 *
+	 * @return bool
+	 */
+	private function lengthMissing() {
+		if ( empty( $this->state['controls']['require_content_length'] ) ) {
+			return false;
+		}
+		return ! isset( $this->req['headers']['content-length'] ) && false === stripos( $this->header( 'transfer-encoding' ), 'chunked' );
+	}
+
+	/**
+	 * Google's HTML "411 Length Required" page (the front end's answer to a POST without Content-Length).
+	 *
+	 * @param string $method Request method.
+	 * @return array
+	 */
+	private function lengthRequiredPage( $method ) {
+		$this->note = 'no Content-Length';
+		return html_response( 411, "<!DOCTYPE html>\n<html lang=en><meta charset=utf-8><title>Error 411 (Length Required)!!1</title><p><b>411.</b> <ins>That's an error.</ins><p>" . htmlspecialchars( $method ) . " requests require a <code>Content-length</code> header.  <ins>That's all we know.</ins>\n" );
 	}
 
 	/**
@@ -2297,18 +2361,21 @@ final class Server {
 			'kind'             => 'drive#fileList',
 			'incompleteSearch' => false,
 		);
-		if ( $offset + $page_size < count( $matches ) ) {
+		$full = min( $page_size, max( 0, count( $matches ) - $offset ) );
+		$take = $this->shortPage( $full );
+		// The token points just past what was served, so a short (or empty) page never skips a file.
+		if ( $offset + $take < count( $matches ) ) {
 			$out['nextPageToken'] = b64url(
 				(string) json_encode(
 					array(
-						'o' => $offset + $page_size,
+						'o' => $offset + $take,
 						'h' => $hash,
 					)
 				)
 			);
 		}
 		$out['files'] = array();
-		foreach ( array_slice( $matches, $offset, $page_size ) as $file ) {
+		foreach ( array_slice( $matches, $offset, $take ) as $file ) {
 			$out['files'][] = $this->fileResource( $file );
 		}
 		if ( null === $tree ) {
@@ -2319,8 +2386,31 @@ final class Server {
 				'files'            => FieldMask::defaultFileTree(),
 			);
 		}
-		$this->note = count( $matches ) . ' match(es)';
+		$this->note = count( $matches ) . ' match(es)' . ( $take < $full ? ', short page: ' . $take . ' of ' . $full : '' );
 		return json_response( 200, FieldMask::apply( $tree, $out ) );
+	}
+
+	/**
+	 * Applies the short_pages control: files.list may return partial or empty pages before the end of the list
+	 * (documented by Google), so a client must page until nextPageToken is absent, not until a page is short.
+	 *
+	 * @param int $full Files the page would hold without the control.
+	 * @return int Files to serve.
+	 */
+	private function shortPage( $full ) {
+		$controls = &$this->state['controls'];
+		if ( null === $controls['short_pages'] || 0 === (int) $controls['short_pages_times'] || $full <= (int) $controls['short_pages'] ) {
+			return $full;
+		}
+		$take = (int) $controls['short_pages'];
+		// Only pages that are actually cut count against short_pages_times.
+		if ( $controls['short_pages_times'] > 0 ) {
+			--$controls['short_pages_times'];
+			if ( 0 === (int) $controls['short_pages_times'] ) {
+				$controls['short_pages'] = null;
+			}
+		}
+		return $take;
 	}
 
 	/**
@@ -2778,6 +2868,7 @@ final class Server {
 
 	/**
 	 * PUT <session URI>: chunk upload or status query. No Authorization needed: the session URI is the credential.
+	 * A sent Authorization header is ignored here but logged, so tests can assert the client leaves it out.
 	 *
 	 * @return array
 	 */
@@ -3135,126 +3226,198 @@ final class Server {
 	}
 
 	/**
-	 * POST /__control.
+	 * POST /__control, in two phases: every key is validated first, without side effects, and only then is anything
+	 * applied. A request that gets 400 has therefore changed nothing: no state, no fake clock, no file on disk.
 	 *
 	 * @return array
 	 */
 	private function control() {
 		$data = json_decode( $this->req['body'], true );
 		if ( ! is_array( $data ) || ( array() !== $data && is_list( $data ) ) ) {
-			return json_response(
-				400,
-				array(
-					'ok'    => false,
-					'error' => 'body must be a JSON object',
-				)
-			);
+			return $this->controlError( 'body must be a JSON object' );
 		}
-		$config_keys = array( 'client_id', 'client_secret', 'email', 'name', 'redirect_uris', 'publishing_status', 'access_token_ttl', 'max_upload_size' );
-		$flag_keys   = array( 'omit_refresh_token', 'deny_next_consent', 'deny_drive_scope_next_consent', 'rotate_refresh_tokens' );
-		$action_keys = array( 'reset', 'clear_faults', 'expire_access_tokens', 'revoke_all', 'expire_sessions', 'clear_log' );
-		$other_keys  = array( 'config', 'fail', 'quota', 'chunk_commit_limit', 'chunk_commit_times', 'advance_time' );
-		$unknown     = array_diff( array_keys( $data ), array_merge( $config_keys, $flag_keys, $action_keys, $other_keys ) );
-		if ( array() !== $unknown ) {
-			return json_response(
-				400,
-				array(
-					'ok'    => false,
-					'error' => 'unknown control key(s): ' . implode( ', ', $unknown ),
-				)
-			);
-		}
-		$backup  = $this->state;
-		$applied = array();
 		try {
-			if ( ! empty( $data['reset'] ) ) {
-				$this->store->wipeBlobs();
-				$this->state = $this->freshState();
-				$this->now   = microtime( true );
-				$applied[]   = 'reset';
-			}
-			foreach ( $data as $key => $value ) {
-				if ( 'reset' === $key ) {
-					continue;
-				}
-				if ( in_array( $key, $config_keys, true ) ) {
-					$this->setConfig( $key, $value );
-				} elseif ( 'config' === $key ) {
-					if ( ! is_array( $value ) ) {
-						throw new \InvalidArgumentException( 'config must be an object' );
-					}
-					foreach ( $value as $name => $item ) {
-						$this->setConfig( $name, $item );
-					}
-				} elseif ( in_array( $key, $flag_keys, true ) ) {
-					$this->state['controls'][ $key ] = (bool) $value;
-				} elseif ( in_array( $key, $action_keys, true ) ) {
-					if ( $value ) {
-						$this->controlAction( $key );
-					}
-				} elseif ( 'fail' === $key ) {
-					$faults = ( is_array( $value ) && is_list( $value ) ) ? $value : array( $value );
-					foreach ( $faults as $fault ) {
-						$this->state['faults'][] = $this->normalizeFault( $fault );
-					}
-				} elseif ( 'quota' === $key ) {
-					if ( ! is_array( $value ) ) {
-						throw new \InvalidArgumentException( 'quota must be an object {limit, usage}' );
-					}
-					if ( array_key_exists( 'limit', $value ) ) {
-						$this->setConfig( 'quota_limit', $value['limit'] );
-					}
-					if ( array_key_exists( 'usage', $value ) ) {
-						$this->setConfig( 'quota_usage', $value['usage'] );
-					}
-				} elseif ( 'chunk_commit_limit' === $key ) {
-					if ( null !== $value && ( ! is_int( $value ) || $value < 0 ) ) {
-						throw new \InvalidArgumentException( 'chunk_commit_limit must be a non-negative integer or null' );
-					}
-					$this->state['controls']['chunk_commit_limit'] = $value;
-					$this->state['controls']['chunk_commit_times'] = null === $value ? 0 : ( isset( $data['chunk_commit_times'] ) ? (int) $data['chunk_commit_times'] : 1 );
-				} elseif ( 'chunk_commit_times' === $key ) {
-					if ( ! is_int( $value ) || $value < -1 ) {
-						throw new \InvalidArgumentException( 'chunk_commit_times must be a positive integer, 0 or -1 (forever)' );
-					}
-					$this->state['controls']['chunk_commit_times'] = $value;
-				} elseif ( 'advance_time' === $key ) {
-					if ( ! is_int( $value ) && ! is_float( $value ) ) {
-						throw new \InvalidArgumentException( 'advance_time must be a number of seconds' );
-					}
-					$this->state['clock_offset'] += $value;
-					$this->now                   += $value;
-				}
-				$applied[] = $key;
-			}
+			$ops = $this->validateControl( $data );
 		} catch ( \InvalidArgumentException $e ) {
-			$this->state = $backup;
-			return json_response(
-				400,
-				array(
-					'ok'    => false,
-					'error' => $e->getMessage(),
-				)
-			);
+			return $this->controlError( $e->getMessage() );
 		}
 		return json_response(
 			200,
 			array(
 				'ok'      => true,
-				'applied' => $applied,
+				'applied' => $this->applyControl( $ops ),
 			)
 		);
 	}
 
 	/**
-	 * Sets one config value (validated).
+	 * The 400 answer of /__control.
+	 *
+	 * @param string $message Error.
+	 * @return array
+	 */
+	private function controlError( $message ) {
+		return json_response(
+			400,
+			array(
+				'ok'    => false,
+				'error' => $message,
+			)
+		);
+	}
+
+	/**
+	 * Phase 1 of /__control: validates every key and normalises its value. Touches neither the state nor the disk.
+	 *
+	 * @param array $data Decoded request body.
+	 * @return array List of [ key, normalised value ]: `reset` first, then the other keys in request order.
+	 * @throws \InvalidArgumentException On an unknown key or an invalid value.
+	 */
+	private function validateControl( array $data ) {
+		$unknown = array_diff( array_keys( $data ), array_merge( self::CONFIG_KEYS, self::FLAG_KEYS, self::ACTION_KEYS, self::OTHER_KEYS ) );
+		if ( array() !== $unknown ) {
+			throw new \InvalidArgumentException( 'unknown control key(s): ' . implode( ', ', $unknown ) );
+		}
+		$ops = array();
+		if ( ! empty( $data['reset'] ) ) {
+			$ops[] = array( 'reset', true );
+		}
+		foreach ( $data as $key => $value ) {
+			if ( 'reset' === $key ) {
+				continue;
+			}
+			if ( in_array( $key, self::CONFIG_KEYS, true ) ) {
+				$value = array( $key => $this->validateConfig( $key, $value ) );
+			} elseif ( 'config' === $key ) {
+				if ( ! is_array( $value ) ) {
+					throw new \InvalidArgumentException( 'config must be an object' );
+				}
+				$config = array();
+				foreach ( $value as $name => $item ) {
+					$config[ $name ] = $this->validateConfig( $name, $item );
+				}
+				$value = $config;
+			} elseif ( in_array( $key, self::FLAG_KEYS, true ) || in_array( $key, self::ACTION_KEYS, true ) ) {
+				$value = (bool) $value;
+			} elseif ( 'require_content_length' === $key ) {
+				if ( ! is_bool( $value ) ) {
+					throw new \InvalidArgumentException( 'require_content_length must be true or false' );
+				}
+			} elseif ( 'fail' === $key ) {
+				$faults = array();
+				foreach ( ( is_array( $value ) && is_list( $value ) ) ? $value : array( $value ) as $fault ) {
+					$faults[] = $this->normalizeFault( $fault );
+				}
+				$value = $faults;
+			} elseif ( 'quota' === $key ) {
+				if ( ! is_array( $value ) || ( array() !== $value && is_list( $value ) ) || array() !== array_diff( array_keys( $value ), array( 'limit', 'usage' ) ) ) {
+					throw new \InvalidArgumentException( 'quota must be an object {limit, usage}' );
+				}
+				$quota = array();
+				if ( array_key_exists( 'limit', $value ) ) {
+					$quota['quota_limit'] = $this->validateConfig( 'quota_limit', $value['limit'] );
+				}
+				if ( array_key_exists( 'usage', $value ) ) {
+					$quota['quota_usage'] = $this->validateConfig( 'quota_usage', $value['usage'] );
+				}
+				$value = $quota;
+			} elseif ( 'chunk_commit_limit' === $key || 'short_pages' === $key ) {
+				if ( null !== $value && ( ! is_int( $value ) || $value < 0 ) ) {
+					throw new \InvalidArgumentException( $key . ' must be a non-negative integer or null' );
+				}
+				$times_key = 'chunk_commit_limit' === $key ? 'chunk_commit_times' : 'short_pages_times';
+				// One-shot unless the matching *_times key is given (it is validated as a key of its own).
+				$times = ( isset( $data[ $times_key ] ) && is_int( $data[ $times_key ] ) ) ? $data[ $times_key ] : 1;
+				$value = array( $value, null === $value ? 0 : $times );
+			} elseif ( 'chunk_commit_times' === $key || 'short_pages_times' === $key ) {
+				if ( ! is_int( $value ) || $value < -1 ) {
+					throw new \InvalidArgumentException( $key . ' must be a positive integer, 0 or -1 (forever)' );
+				}
+			} elseif ( 'advance_time' === $key ) {
+				if ( ! is_int( $value ) && ! is_float( $value ) ) {
+					throw new \InvalidArgumentException( 'advance_time must be a number of seconds' );
+				}
+			}
+			$ops[] = array( $key, $value );
+		}
+		return $ops;
+	}
+
+	/**
+	 * Phase 2 of /__control: applies validated keys in order. Files are deleted only once every state change is in
+	 * place, and a failure while applying restores both the state and the fake clock ($this->now, which run() hands
+	 * to collectGarbage()), so a half-applied request never survives.
+	 *
+	 * @param array $ops Output of validateControl().
+	 * @return string[] Applied keys.
+	 * @throws \Throwable Re-thrown after the rollback; run() answers 500.
+	 */
+	private function applyControl( array $ops ) {
+		$backup_state = $this->state;
+		$backup_now   = $this->now;
+		$wipe         = false;
+		$unlink       = array();
+		$applied      = array();
+		try {
+			foreach ( $ops as $op ) {
+				list( $key, $value ) = $op;
+				if ( 'reset' === $key ) {
+					$this->state = $this->freshState();
+					$this->now   = microtime( true );
+					$wipe        = true;
+				} elseif ( in_array( $key, self::CONFIG_KEYS, true ) || 'config' === $key || 'quota' === $key ) {
+					foreach ( $value as $name => $item ) {
+						$this->state['config'][ $name ] = $item;
+					}
+				} elseif ( in_array( $key, self::ACTION_KEYS, true ) ) {
+					if ( $value ) {
+						$unlink = array_merge( $unlink, $this->controlAction( $key ) );
+					}
+				} elseif ( 'fail' === $key ) {
+					$this->state['faults'] = array_merge( $this->state['faults'], $value );
+				} elseif ( 'chunk_commit_limit' === $key || 'short_pages' === $key ) {
+					$times_key                             = 'chunk_commit_limit' === $key ? 'chunk_commit_times' : 'short_pages_times';
+					$this->state['controls'][ $key ]       = $value[0];
+					$this->state['controls'][ $times_key ] = $value[1];
+				} elseif ( 'advance_time' === $key ) {
+					$this->state['clock_offset'] += $value;
+					$this->now                   += $value;
+				} else {
+					// Flags, require_content_length and the *_times keys.
+					$this->state['controls'][ $key ] = $value;
+				}
+				$applied[] = $key;
+			}
+		} catch ( \Throwable $e ) {
+			$this->state = $backup_state;
+			$this->now   = $backup_now;
+			throw $e;
+		}
+		try {
+			if ( $wipe ) {
+				$this->store->wipeBlobs();
+			}
+			foreach ( $unlink as $path ) {
+				if ( is_file( $path ) ) {
+					unlink( $path );
+				}
+			}
+		} catch ( \ErrorException $e ) {
+			// The state no longer points at these files, so one left behind is litter, not a broken request.
+			error_log( 'fake-google: cleanup after /__control failed: ' . $e->getMessage() ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions -- test tool.
+		}
+		return $applied;
+	}
+
+	/**
+	 * Validates one config value.
 	 *
 	 * @param string $name  Key.
 	 * @param mixed  $value Value.
-	 * @return void
+	 * @return mixed The value to store.
 	 * @throws \InvalidArgumentException When invalid.
 	 */
-	private function setConfig( $name, $value ) {
+	private function validateConfig( $name, $value ) {
 		switch ( $name ) {
 			case 'client_id':
 			case 'client_secret':
@@ -3263,43 +3426,41 @@ final class Server {
 				if ( ! is_string( $value ) || '' === $value ) {
 					throw new \InvalidArgumentException( $name . ' must be a non-empty string' );
 				}
-				break;
+				return $value;
 			case 'publishing_status':
 				if ( ! in_array( $value, array( 'production', 'testing' ), true ) ) {
 					throw new \InvalidArgumentException( 'publishing_status must be production or testing' );
 				}
-				break;
+				return $value;
 			case 'redirect_uris':
 				if ( ! is_array( $value ) || ! is_list( $value ) ) {
 					throw new \InvalidArgumentException( 'redirect_uris must be a list of URIs ([] accepts any)' );
 				}
-				$value = array_values( array_map( 'strval', $value ) );
-				break;
+				return array_values( array_map( 'strval', $value ) );
 			case 'access_token_ttl':
 			case 'quota_usage':
 			case 'max_upload_size':
 				if ( ! is_int( $value ) || $value < 0 ) {
 					throw new \InvalidArgumentException( $name . ' must be a non-negative integer' );
 				}
-				break;
+				return $value;
 			case 'quota_limit':
 				if ( null !== $value && ( ! is_int( $value ) || $value < 0 ) ) {
 					throw new \InvalidArgumentException( 'quota limit must be a non-negative integer or null (unlimited)' );
 				}
-				break;
-			default:
-				throw new \InvalidArgumentException( 'unknown config key: ' . $name );
+				return $value;
 		}
-		$this->state['config'][ $name ] = $value;
+		throw new \InvalidArgumentException( 'unknown config key: ' . $name );
 	}
 
 	/**
-	 * One-shot control actions.
+	 * One-shot control actions (state changes only).
 	 *
 	 * @param string $key Action.
-	 * @return void
+	 * @return string[] Files to delete once the whole request has been applied.
 	 */
 	private function controlAction( $key ) {
+		$unlink = array();
 		switch ( $key ) {
 			case 'clear_faults':
 				$this->state['faults'] = array();
@@ -3323,15 +3484,13 @@ final class Server {
 				}
 				break;
 			case 'expire_sessions':
-				foreach ( $this->state['sessions'] as $id => $session ) {
+				foreach ( array_keys( $this->state['sessions'] ) as $id ) {
 					$this->state['sessions'][ $id ]['expired'] = true;
-					$part                                      = $this->store->partPath( $id );
-					if ( is_file( $part ) ) {
-						unlink( $part );
-					}
+					$unlink[]                                  = $this->store->partPath( $id );
 				}
 				break;
 		}
+		return $unlink;
 	}
 
 	/**
@@ -3443,6 +3602,12 @@ final class Server {
 		$range = $this->header( 'content-range' );
 		if ( '' !== $range ) {
 			$entry['content_range'] = $range;
+		}
+		if ( '/upload/drive/v3/files' === $this->req['path'] ) {
+			// The two request rules of the session URI (design section 7, research checklist H) are only
+			// observable here: status queries send "Content-Length: 0", chunk PUTs send no Authorization.
+			$entry['content_length'] = isset( $this->req['headers']['content-length'] ) ? trim( (string) $this->req['headers']['content-length'] ) : null;
+			$entry['authorization']  = isset( $this->req['headers']['authorization'] );
 		}
 		if ( $this->fault_applied ) {
 			$entry['fault'] = true;

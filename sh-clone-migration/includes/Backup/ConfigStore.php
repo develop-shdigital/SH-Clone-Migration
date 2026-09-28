@@ -70,8 +70,12 @@ final class ConfigStore {
 	/**
 	 * Read a document.
 	 *
+	 * Check readable() before acting on an empty result: a document that
+	 * exists but belongs to another system account (WP-CLI run as root, PHP
+	 * as www-data) also reads as empty here.
+	 *
 	 * @param string $name Document name.
-	 * @return array Empty when missing or unreadable.
+	 * @return array Empty when missing, unreadable or damaged.
 	 */
 	public function read( $name ) {
 		$path = $this->path( $name );
@@ -88,6 +92,82 @@ final class ConfigStore {
 		}
 		$data = Json::decode( $raw );
 		return is_array( $data ) ? $data : array();
+	}
+
+	/**
+	 * Whether this process can read a document: it does not exist yet, or it
+	 * exists and is readable. False means the stored data is there but out
+	 * of reach, so it must not be mistaken for "nothing configured".
+	 *
+	 * @param string $name Document name.
+	 * @return bool
+	 */
+	public function readable( $name ) {
+		$path = $this->path( $name );
+		clearstatcache( true, $path );
+		return ! file_exists( $path ) || is_readable( $path );
+	}
+
+	/**
+	 * Problems that stop this process from using the stored configuration,
+	 * as sentences for the admin (empty when there are none).
+	 *
+	 * @param string[] $names Documents to check.
+	 * @return string[]
+	 */
+	public function problems( array $names ) {
+		$problems = array();
+		foreach ( $names as $name ) {
+			if ( ! $this->readable( $name ) ) {
+				$problems[] = sprintf(
+					/* translators: 1: file path, 2: system user name */
+					__( '%1$s cannot be read by the web server (it belongs to %2$s). Run WP-CLI as the web server user, or make the file readable for it.', 'sh-clone-migration' ),
+					$this->path( $name ),
+					self::owner( $this->path( $name ) )
+				);
+			}
+		}
+		if ( is_dir( $this->directory ) && ! is_writable( $this->directory ) ) {
+			$problems[] = sprintf(
+				/* translators: 1: directory path, 2: system user name */
+				__( '%1$s is not writable by the web server (it belongs to %2$s), so settings cannot be saved.', 'sh-clone-migration' ),
+				$this->directory,
+				self::owner( $this->directory )
+			);
+		}
+		return $problems;
+	}
+
+	/**
+	 * Mode for new files: WordPress's FS_CHMOD_FILE, else 0644. The sealed
+	 * values inside cannot be opened without wp-config.php; what matters is
+	 * that WP-CLI and PHP, often different system accounts, can both read
+	 * what the other wrote.
+	 *
+	 * @return int
+	 */
+	private static function fileMode() {
+		return defined( 'FS_CHMOD_FILE' ) ? ( (int) FS_CHMOD_FILE & 0666 ) | 0644 : 0644;
+	}
+
+	/**
+	 * Owner of a file, for messages.
+	 *
+	 * @param string $path Path.
+	 * @return string
+	 */
+	private static function owner( $path ) {
+		$uid = @fileowner( $path );
+		if ( false === $uid ) {
+			return '?';
+		}
+		if ( function_exists( 'posix_getpwuid' ) ) {
+			$info = @posix_getpwuid( $uid );
+			if ( is_array( $info ) && isset( $info['name'] ) ) {
+				return (string) $info['name'];
+			}
+		}
+		return 'uid ' . $uid;
 	}
 
 	/**
@@ -108,7 +188,7 @@ final class ConfigStore {
 			@unlink( $tmp );
 			return false;
 		}
-		@chmod( $tmp, 0640 );
+		@chmod( $tmp, self::fileMode() );
 		if ( ! @rename( $tmp, $path ) ) {
 			@unlink( $tmp );
 			return false;
@@ -132,11 +212,16 @@ final class ConfigStore {
 		if ( ! $this->ensureDirectory() ) {
 			throw new \RuntimeException( 'The configuration directory is not writable: ' . $this->directory );
 		}
-		$lock = @fopen( $path . '.lock', 'c' );
+		$lock = $this->openLock( $path . '.lock' );
 		if ( $lock ) {
 			flock( $lock, LOCK_EX );
 		}
 		try {
+			if ( ! $this->readable( $name ) ) {
+				// Writing now would replace the stored settings with an
+				// empty document plus this change.
+				throw new \RuntimeException( implode( ' ', $this->problems( array( $name ) ) ) );
+			}
 			$data = $mutator( $this->read( $name ) );
 			if ( ! is_array( $data ) ) {
 				throw new \RuntimeException( 'A configuration update must return an array.' );
@@ -167,7 +252,7 @@ final class ConfigStore {
 	 */
 	public function delete( $name ) {
 		$path = $this->path( $name );
-		$lock = is_file( $path . '.lock' ) ? @fopen( $path . '.lock', 'c' ) : false;
+		$lock = is_file( $path . '.lock' ) ? $this->openLock( $path . '.lock' ) : false;
 		if ( $lock ) {
 			flock( $lock, LOCK_EX );
 		}
@@ -179,6 +264,25 @@ final class ConfigStore {
 			flock( $lock, LOCK_UN );
 			fclose( $lock );
 		}
+	}
+
+	/**
+	 * Open (or create) a lock file. A lock file created by another system
+	 * account may not be writable here; flock() works on a read-only handle.
+	 *
+	 * @param string $path Lock file.
+	 * @return resource|false
+	 */
+	private function openLock( $path ) {
+		$created = ! file_exists( $path );
+		$handle  = @fopen( $path, 'c' ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		if ( false === $handle ) {
+			return @fopen( $path, 'r' ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		}
+		if ( $created ) {
+			@chmod( $path, self::fileMode() );
+		}
+		return $handle;
 	}
 
 	/**

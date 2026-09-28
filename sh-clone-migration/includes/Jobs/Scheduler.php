@@ -387,15 +387,6 @@ class Scheduler {
 	}
 
 	/**
-	 * Ids of every job that may still run.
-	 *
-	 * @return string[]
-	 */
-	protected function runnableJobIds() {
-		return self::jobIds( $this->runnableJobs() );
-	}
-
-	/**
 	 * Ids of the given jobs.
 	 *
 	 * @param Job[] $jobs Jobs.

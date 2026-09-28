@@ -300,7 +300,7 @@ class AnnouncingRunner extends JobRunner {
 	 * @return void
 	 */
 	protected function announce( $hook, ...$args ) {
-		$job                = $args[0];
+		$job               = $args[0];
 		self::$announced[] = array( $hook, $job->id(), $job->status() );
 	}
 
@@ -435,6 +435,13 @@ class SaveHookStore extends JobStore {
 	public $before_save = null;
 
 	/**
+	 * Called with the job before each save; true makes the save fail.
+	 *
+	 * @var callable|null
+	 */
+	public $refuse = null;
+
+	/**
 	 * Save.
 	 *
 	 * @param Job $job Job.
@@ -443,6 +450,9 @@ class SaveHookStore extends JobStore {
 	public function save( Job $job ) {
 		if ( null !== $this->before_save ) {
 			call_user_func( $this->before_save, $job );
+		}
+		if ( null !== $this->refuse && call_user_func( $this->refuse, $job ) ) {
+			return false;
 		}
 		return parent::save( $job );
 	}
@@ -1574,6 +1584,68 @@ class JobsTest extends TestCase {
 		$this->assertSame( 1, AnnouncingRunner::count( 'shcm_job_cancelled' ) );
 		$this->assertFalse( JobLock::cancelRequested( $this->storage->jobs(), $job->id() ) );
 		$this->assertFalse( $lock->isHeld( $job->id() ) );
+	}
+
+	public function testARequestDyingWhileSavingTheCancelLeavesItPending() {
+		$store  = new SaveHookStore( $this->storage );
+		$work   = $this->countingStage( 'work', 5 );
+		$runner = new AnnouncingRunner( $store, new ArrayResolver( array( 'work' => $work ) ), $this->logger, $this->settings );
+
+		$job = Job::create( 'export', array(), array( 'work' ) );
+		$job->set( 'status', Job::STATUS_PAUSED );
+		$store->save( $job );
+		JobLock::requestCancel( $this->storage->jobs(), $job->id() );
+
+		// The request dies (a timeout, say) while saving the cancelled job.
+		$store->before_save = function ( Job $saving ) {
+			if ( Job::STATUS_CANCELLED === $saving->status() ) {
+				throw new \RuntimeException( 'request died' );
+			}
+		};
+		try {
+			$runner->tick( $job );
+			$this->fail( 'The simulated death did not happen.' );
+		} catch ( \RuntimeException $e ) {
+			$this->assertSame( 'request died', $e->getMessage() );
+		}
+		$this->assertTrue( JobLock::cancelRequested( $this->storage->jobs(), $job->id() ), 'The cancel is still pending, not lost.' );
+		$this->assertSame( Job::STATUS_PAUSED, $this->store->load( $job->id() )->status() );
+		$this->assertSame( array(), AnnouncingRunner::$announced );
+		$this->assertFalse( JobLock::isLocked( $this->storage->jobs(), $job->id() ) );
+
+		// The next tick carries it out.
+		$store->before_save = null;
+		$result             = $runner->tick( $this->store->load( $job->id() ) );
+		$this->assertSame( Job::STATUS_CANCELLED, $result->status() );
+		$this->assertFalse( JobLock::cancelRequested( $this->storage->jobs(), $job->id() ) );
+		$this->assertSame( 1, AnnouncingRunner::count( 'shcm_job_cancelled' ) );
+	}
+
+	public function testACancelWhoseSaveFailsStaysPendingAndIsAnnouncedOnce() {
+		$store  = new SaveHookStore( $this->storage );
+		$work   = $this->countingStage( 'work', 5 );
+		$runner = new AnnouncingRunner( $store, new ArrayResolver( array( 'work' => $work ) ), $this->logger, $this->settings );
+
+		$job = Job::create( 'export', array(), array( 'work' ) );
+		$job->set( 'status', Job::STATUS_PAUSED );
+		$store->save( $job );
+		JobLock::requestCancel( $this->storage->jobs(), $job->id() );
+
+		// The disk is full when the cancelled state is written.
+		$store->refuse = function ( Job $saving ) {
+			return Job::STATUS_CANCELLED === $saving->status();
+		};
+		$runner->tick( $job );
+		$this->assertTrue( JobLock::cancelRequested( $this->storage->jobs(), $job->id() ) );
+		$this->assertSame( Job::STATUS_PAUSED, $this->store->load( $job->id() )->status() );
+		$this->assertSame( array(), AnnouncingRunner::$announced, 'Not announced while nothing was recorded.' );
+
+		$store->refuse = null;
+		$result        = $runner->tick( $this->store->load( $job->id() ) );
+		$this->assertSame( Job::STATUS_CANCELLED, $result->status() );
+		$this->assertSame( Job::STATUS_CANCELLED, $this->store->load( $job->id() )->status() );
+		$this->assertFalse( JobLock::cancelRequested( $this->storage->jobs(), $job->id() ) );
+		$this->assertSame( 1, AnnouncingRunner::count( 'shcm_job_cancelled' ) );
 	}
 
 	public function testACancelRequestForAJobThatFinishedMeanwhileIsDropped() {

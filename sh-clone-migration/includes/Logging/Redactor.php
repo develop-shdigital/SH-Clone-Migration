@@ -122,12 +122,13 @@ class Redactor {
 			'#(\b(?:code|authorization_code|code_verifier|upload_id|id_token|assertion|client_assertion|session_uri|upload_url)[\'"]?\s*[:=]\s*[\'"]?)([^\s,;\'"&]{8,})#i',
 			// Google token shapes, also in free text and stack traces: access token,
 			// refresh token, authorization code, client secret. They may also start
-			// right after a percent-encoded character ("%3DGOCSPX-...", where \b does
-			// not match) and carry encoded slashes ("1%2F%2F0...").
+			// right after a percent-encoded character ("%221%2F%2F0...", where \b does
+			// not match) and carry encoded slashes. The client secret prefix is
+			// distinctive enough to match anywhere.
 			'#(?:\b|(?<=%[0-9A-Fa-f]{2}))ya29\.[A-Za-z0-9\-_.]+#',
 			'#(?:\b|(?<=%[0-9A-Fa-f]{2}))1(?:/|%2[Ff]){2}[A-Za-z0-9\-_]{10,}#',
 			'#(?:\b|(?<=%[0-9A-Fa-f]{2}))4(?:/|%2[Ff])0[A-Za-z0-9\-_]{10,}#',
-			'#(?:\b|(?<=%[0-9A-Fa-f]{2}))GOCSPX-[A-Za-z0-9\-_]{10,}#',
+			'#GOCSPX-[A-Za-z0-9\-_]{10,}#',
 			// A resumable upload session URI is itself a credential.
 			'#([?&]upload_id=)[^\s&\'"]+#i',
 		);

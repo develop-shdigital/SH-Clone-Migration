@@ -17,6 +17,18 @@ $shcm_free     = $plugin->storage()->freeSpace();
 $shcm_total    = $catalog->totalSize();
 $shcm_jobs     = $plugin->jobs()->all( null, 15 );
 
+// Google Drive: offer to send archives there, and show which already are.
+$shcm_drive   = false;
+$shcm_history = null;
+if ( $plugin::backupsAvailable() ) {
+	try {
+		$shcm_drive   = $plugin->backups()->connection()->isUsable();
+		$shcm_history = $plugin->backups()->history();
+	} catch ( \Exception $shcm_error ) {
+		$shcm_drive = false;
+	}
+}
+
 Menu::header(
 	__( 'Migration backups', 'sh-clone-migration' ),
 	__( 'Every archive this installation has produced or received.', 'sh-clone-migration' )
@@ -72,6 +84,15 @@ Menu::header(
 						<?php if ( empty( $shcm_archive['complete'] ) ) : ?>
 							<span class="shcm-tag shcm-tag--warn"><?php esc_html_e( 'incomplete', 'sh-clone-migration' ); ?></span>
 						<?php endif; ?>
+						<?php
+						$shcm_entry = null !== $shcm_history ? $shcm_history->forArchive( $shcm_archive['name'] ) : null;
+						if ( null !== $shcm_entry && ! empty( $shcm_entry['kind'] ) && 'backup' === $shcm_entry['kind'] ) :
+							?>
+							<span class="shcm-tag"><?php esc_html_e( 'scheduled backup', 'sh-clone-migration' ); ?></span>
+						<?php endif; ?>
+						<?php if ( null !== $shcm_entry && isset( $shcm_entry['remote']['status'] ) && 'uploaded' === $shcm_entry['remote']['status'] ) : ?>
+							<span class="shcm-tag shcm-tag--ok"><?php esc_html_e( 'on Google Drive', 'sh-clone-migration' ); ?></span>
+						<?php endif; ?>
 						<div class="shcm-verify-result" data-role="verify-result"></div>
 					</td>
 					<td><?php echo esc_html( $shcm_archive['source'] ? $shcm_archive['source'] : '—' ); ?></td>
@@ -101,6 +122,9 @@ Menu::header(
 							<span class="description"><?php esc_html_e( 'Still being written, or the export did not finish', 'sh-clone-migration' ); ?></span>
 						<?php endif; ?>
 						<button type="button" class="button button-small" data-action="verify"><?php esc_html_e( 'Verify', 'sh-clone-migration' ); ?></button>
+						<?php if ( $shcm_drive && ! empty( $shcm_archive['complete'] ) ) : ?>
+							<button type="button" class="button button-small" data-action="gdrive"><?php esc_html_e( 'Send to Google Drive', 'sh-clone-migration' ); ?></button>
+						<?php endif; ?>
 						<button type="button" class="button button-small button-link-delete" data-action="delete"><?php esc_html_e( 'Delete', 'sh-clone-migration' ); ?></button>
 					</td>
 				</tr>
@@ -140,7 +164,12 @@ Menu::header(
 						<a class="button button-small" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=shcm_download_log&job_id=' . rawurlencode( $shcm_job->id() ) ), 'shcm_download_log' ) ); ?>">
 							<?php esc_html_e( 'Log', 'sh-clone-migration' ); ?>
 						</a>
-						<?php if ( $shcm_job->isRunnable() ) : ?>
+						<?php if ( $shcm_job->isRunnable() && $shcm_job->param( 'background' ) ) : ?>
+							<?php // Backups run by themselves; their screen shows the progress. ?>
+							<a class="button button-small" href="<?php echo esc_url( admin_url( 'admin.php?page=shcm-schedules' ) ); ?>">
+								<?php esc_html_e( 'Progress', 'sh-clone-migration' ); ?>
+							</a>
+						<?php elseif ( $shcm_job->isRunnable() ) : ?>
 							<a class="button button-small" href="<?php echo esc_url( admin_url( 'admin.php?page=' . ( 'import' === $shcm_job->type() ? 'shcm-import' : 'shcm' ) . '&job=' . rawurlencode( $shcm_job->id() ) ) ); ?>">
 								<?php esc_html_e( 'Resume', 'sh-clone-migration' ); ?>
 							</a>

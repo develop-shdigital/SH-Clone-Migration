@@ -144,6 +144,56 @@ class RedactorTest extends TestCase {
 		);
 	}
 
+	public function testLiteralsAreAlsoRedactedUrlEncoded() {
+		$secret = 'p@ss w0rd/+~x';
+		$this->redactor->addLiteral( $secret );
+		$this->assertSame( 'raw [redacted] end', $this->redactor->scrub( 'raw ' . $secret . ' end' ) );
+		// rawurlencode(): %20 and a literal ~; urlencode(): + and %7E.
+		$this->assertSame( 'next=[redacted]&x=1', $this->redactor->scrub( 'next=' . rawurlencode( $secret ) . '&x=1' ) );
+		$this->assertSame( 'body [redacted] end', $this->redactor->scrub( 'body ' . urlencode( $secret ) . ' end' ) );
+		// A URL inside a URL parameter, e.g. a redirect target carrying a refresh token.
+		$refresh = '1//0gOpaqueRefresh-value_123';
+		$this->redactor->addLiteral( $refresh );
+		$nested  = 'https://example.test/cb?next=' . rawurlencode( 'https://x.test/?rt=' . $refresh );
+		$this->assertStringNotContainsString( rawurlencode( $refresh ), $this->redactor->scrub( $nested ) );
+		$this->assertStringNotContainsString( '0gOpaque', $this->redactor->scrub( $nested ) );
+
+		// Too short to be a secret: ignored, also encoded.
+		$this->redactor->addLiteral( 'a b' );
+		$this->assertSame( 'a b a%20b a+b', $this->redactor->scrub( 'a b a%20b a+b' ) );
+	}
+
+	public function testGoogleTokenShapesInEncodedContexts() {
+		$this->assertSame( 'client_secret%3D[redacted]', $this->redactor->scrub( 'client_secret%3DGOCSPX-abcdefghijklmn' ) );
+		$this->assertSame( 'refresh_token%22%3A%22[redacted]%22', $this->redactor->scrub( 'refresh_token%22%3A%221%2F%2F0gAbCdefghijklmn%22' ) );
+		$this->assertSame( 'x%3D[redacted]%26y', $this->redactor->scrub( 'x%3D1%2f%2f0gAbCdefghijklmn%26y' ) );
+		$this->assertSame( 'code%3D[redacted]%26scope', $this->redactor->scrub( 'code%3D4%2F0AX4XfWh-abc_DEF%26scope' ) );
+		$this->assertSame( 'access%3D[redacted]', $this->redactor->scrub( 'access%3Dya29.a0AfB_byC-xyz' ) );
+		// A client secret glued to other text.
+		$this->assertScrubbed( 'secretisGOCSPX-AbCdEf_1234567', array( 'GOCSPX-AbCdEf' ) );
+		// Still no match inside ordinary words and paths.
+		foreach ( array( 'Kenya29.5 km', 'page%201//comment', 'v1%2F%2F', 'wp-content/uploads/41//x' ) as $text ) {
+			$this->assertSame( $text, $this->redactor->scrub( $text ) );
+		}
+	}
+
+	public function testPatternsStayLinearOnAdversarialInput() {
+		$inputs = array(
+			str_repeat( '%3D', 300000 ),
+			str_repeat( '%2F1%2F', 150000 ),
+			str_repeat( '%3D1%2F%2F', 100000 ),
+			str_repeat( 'GOCSPX-', 150000 ),
+			str_repeat( '%3Dya29.', 110000 ),
+		);
+		$start = microtime( true );
+		foreach ( $inputs as $input ) {
+			$this->assertIsString( $this->redactor->scrub( $input ) );
+			$this->assertSame( PREG_NO_ERROR, preg_last_error() );
+		}
+		// Linear patterns need a fraction of a second; backtracking would take minutes.
+		$this->assertLessThan( 5.0, microtime( true ) - $start );
+	}
+
 	public function testNoFalsePositives() {
 		$unchanged = array(
 			'{"error":{"code":403,"message":"The user has exceeded their Drive storage quota","errors":[{"reason":"storageQuotaExceeded"}]}}',

@@ -330,6 +330,26 @@ class JobRunner {
 	}
 
 	/**
+	 * Final status message: a backup (or an upload to Google Drive) says so
+	 * instead of calling itself a migration.
+	 *
+	 * @param Job    $job    Job.
+	 * @param string $status Job::STATUS_COMPLETED or Job::STATUS_CANCELLED.
+	 * @return string
+	 */
+	protected function outcomeMessage( Job $job, $status ) {
+		$backup    = $job->param( 'backup' );
+		$completed = Job::STATUS_COMPLETED === $status;
+		if ( is_array( $backup ) && ! empty( $backup['kind'] ) ) {
+			if ( $job->param( 'upload_only' ) ) {
+				return $completed ? __( 'Upload to Google Drive completed.', 'sh-clone-migration' ) : __( 'Upload to Google Drive cancelled.', 'sh-clone-migration' );
+			}
+			return $completed ? __( 'Backup completed.', 'sh-clone-migration' ) : __( 'Backup cancelled.', 'sh-clone-migration' );
+		}
+		return $completed ? __( 'Migration completed.', 'sh-clone-migration' ) : __( 'Migration cancelled.', 'sh-clone-migration' );
+	}
+
+	/**
 	 * Run the cleanups, mark a job cancelled, save it and announce it.
 	 *
 	 * Only a request holding the job's lock gets here, so the cancellation is
@@ -343,8 +363,13 @@ class JobRunner {
 		$this->runCleanup( $job, $error );
 		$job->set( 'status', Job::STATUS_CANCELLED );
 		$job->set( 'finished_at', time() );
-		$job->set( 'message', __( 'Migration cancelled.', 'sh-clone-migration' ) );
-		$this->store->save( $job );
+		$job->set( 'message', $this->outcomeMessage( $job, Job::STATUS_CANCELLED ) );
+		if ( ! $this->store->save( $job ) ) {
+			// Nothing was recorded (a full disk, say): keep the request, so
+			// the next tick finishes the cancel and announces it then, once.
+			$this->logger->error( sprintf( 'Job %s: the cancelled state could not be saved; the cancel stays pending.', $job->id() ) );
+			return $job;
+		}
 		// Removed only once the cancelled status is saved: a request dying
 		// in between must leave the cancel pending, not lose it.
 		$this->clearCancelRequest( $job->id() );
@@ -507,7 +532,7 @@ class JobRunner {
 		$job->set( 'progress', 100.0 );
 		$job->set( 'stage_progress', 1.0 );
 		$job->set( 'finished_at', time() );
-		$job->set( 'message', __( 'Migration completed.', 'sh-clone-migration' ) );
+		$job->set( 'message', $this->outcomeMessage( $job, Job::STATUS_COMPLETED ) );
 		$this->store->save( $job );
 		// A cancel requested after the check above came too late.
 		$this->clearCancelRequest( $job->id() );

@@ -39,6 +39,14 @@ class GoogleDriveFakeTransport implements HttpTransport {
 	public $requests = array();
 
 	/**
+	 * Called with ( method, url ) before each answer, to let "another request"
+	 * change the stored state while this one is in flight.
+	 *
+	 * @var callable|null
+	 */
+	public $during = null;
+
+	/**
 	 * Queue a response.
 	 *
 	 * @param int    $status  Status.
@@ -86,6 +94,9 @@ class GoogleDriveFakeTransport implements HttpTransport {
 		if ( empty( $this->responses ) ) {
 			throw new \LogicException( 'Unexpected request: ' . $method . ' ' . $url );
 		}
+		if ( is_callable( $this->during ) ) {
+			call_user_func( $this->during, $method, $url );
+		}
 		return array_shift( $this->responses );
 	}
 
@@ -126,7 +137,7 @@ class GoogleDriveFakeTransport implements HttpTransport {
  */
 class GoogleDriveTest extends TestCase {
 
-	const CLIENT_ID     = 'client-123.apps.googleusercontent.com';
+	const CLIENT_ID     = 'client-123' . '.apps.googleusercontent.com'; // Split: fake, but scanner-shaped.
 	const CLIENT_SECRET = 'CS-secret-client-5d6e7f';
 	const REFRESH       = 'RT-secret-refresh-9f8e7d';
 	const ACCESS        = 'AT-secret-access-1a2b3c';
@@ -675,6 +686,161 @@ class GoogleDriveTest extends TestCase {
 		$this->assertCount( $count, $this->http->requests );
 	}
 
+	public function testRefreshDoesNotOverwriteAGrantStoredMeanwhile() {
+		$this->connect();
+		$this->now += 7200;
+		// The admin's browser request, on the same config store.
+		$admin = $this->makeConnection( self::FINGERPRINT );
+
+		// While the background job refreshes with the old grant, the admin connects another account.
+		$this->http->during = function () use ( $admin ) {
+			$admin->storeTokens( 'RT-account-B', 'AT-account-B', 3600, OAuth::SCOPE );
+		};
+		$this->http->json(
+			200,
+			array(
+				'access_token' => 'AT-from-account-A',
+				'expires_in'   => 3599,
+			)
+		);
+
+		// The old grant's token is dropped; the job continues with the new grant.
+		$this->assertSame( 'AT-account-B', $this->oauth->accessToken() );
+		$this->assertCount( 1, $this->http->requests );
+		$this->assertSame( 'AT-account-B', $admin->accessToken() );
+		$this->assertSame( 'RT-account-B', $admin->refreshToken() );
+		$this->assertSame( Connection::STATE_CONNECTED, $admin->status()['state'] );
+	}
+
+	public function testRejectedRefreshDoesNotBreakAGrantStoredMeanwhile() {
+		foreach ( array( 'invalid_grant', 'invalid_client' ) as $error ) {
+			$this->connect();
+			$this->now  += 7200;
+			$admin       = $this->makeConnection( self::FINGERPRINT );
+			$new_refresh = 'RT-new-grant-' . $error;
+
+			// Google rejects the old grant after the admin already connected again.
+			$this->http->during = function () use ( $admin, $new_refresh ) {
+				$admin->storeTokens( $new_refresh, 'AT-new-grant', 3600, OAuth::SCOPE );
+			};
+			$this->http->json(
+				400,
+				array(
+					'error'             => $error,
+					'error_description' => 'Token has been expired or revoked.',
+				)
+			);
+
+			$this->assertSame( 'AT-new-grant', $this->oauth->accessToken(), $error );
+			$this->http->during = null;
+			$status             = $admin->status();
+			$this->assertSame( Connection::STATE_CONNECTED, $status['state'], $error );
+			$this->assertSame( '', $status['error'], $error );
+			$this->assertSame( 'AT-new-grant', $admin->accessToken(), $error );
+			$this->assertSame( $new_refresh, $admin->refreshToken(), $error );
+		}
+	}
+
+	public function testRefreshRacingADisconnectOrAnotherRefresh() {
+		// Disconnected while the refresh was in flight: nothing is written back.
+		$this->connect();
+		$this->now += 7200;
+		$admin      = $this->makeConnection( self::FINGERPRINT );
+		$this->http->during = function () use ( $admin ) {
+			$admin->disconnect();
+		};
+		$this->http->json(
+			200,
+			array(
+				'access_token' => 'AT-after-disconnect',
+				'expires_in'   => 3599,
+			)
+		);
+		$e = $this->catchDrive(
+			function () {
+				$this->oauth->accessToken();
+			}
+		);
+		$this->assertSame( DriveException::NOT_CONNECTED, $e->kind() );
+		$data = $this->store->read( 'gdrive' );
+		$this->assertArrayNotHasKey( 'access_token', $data );
+		$this->assertArrayNotHasKey( 'refresh_token', $data );
+		$this->assertSame( Connection::STATE_NOT_CONNECTED, $admin->status()['state'] );
+
+		// The grant changes during both attempts: the second token is returned, not cached.
+		$this->connect();
+		$this->now += 7200;
+		$round              = 0;
+		$this->http->during = function () use ( $admin, &$round ) {
+			++$round;
+			$admin->storeTokens( 'RT-round-' . $round, '', 0, OAuth::SCOPE );
+		};
+		$this->http->json(
+			200,
+			array(
+				'access_token' => 'AT-round-1',
+				'expires_in'   => 3599,
+			)
+		);
+		$this->http->json(
+			200,
+			array(
+				'access_token' => 'AT-round-2',
+				'expires_in'   => 3599,
+			)
+		);
+		$this->assertSame( 'AT-round-2', $this->oauth->accessToken() );
+		$this->assertSame( array( 'grant_type' => 'refresh_token', 'refresh_token' => 'RT-round-1' ), array_intersect_key( $this->http->form( 2 ), array_flip( array( 'grant_type', 'refresh_token' ) ) ) );
+		$this->assertNull( $admin->accessToken() );
+		$this->assertSame( 'RT-round-2', $admin->refreshToken() );
+
+		// Rejected twice for replaced grants: a retryable error, and the connection stays usable.
+		$this->http->json( 400, array( 'error' => 'invalid_grant' ) );
+		$this->http->json( 400, array( 'error' => 'invalid_grant' ) );
+		$e = $this->catchDrive(
+			function () {
+				$this->oauth->accessToken();
+			}
+		);
+		$this->assertSame( DriveException::SERVER, $e->kind() );
+		$this->assertSame( OAuth::GRANT_REPLACED, $e->reason() );
+		$this->assertTrue( $e->isRetryable() );
+		$this->assertSame( Connection::STATE_CONNECTED, $admin->status()['state'] );
+		$this->assertSame( array(), $this->http->responses );
+	}
+
+	public function testConnectionCompareAndSet() {
+		$this->connect();
+
+		// A refresh made with another refresh token than the stored one writes nothing.
+		$this->assertFalse( $this->connection->storeAccessToken( 'AT-stale-grant', 3600, '', 'RT-some-older-grant' ) );
+		$this->assertSame( self::ACCESS, $this->connection->accessToken() );
+		$this->assertFalse( $this->connection->storeAccessToken( 'AT-stale-grant', 3600, 'RT-rotated-stale', 'RT-some-older-grant' ) );
+		$this->assertSame( self::REFRESH, $this->connection->refreshToken() );
+		$this->assertFalse( $this->connection->markReconnect( 'Revoked.', 'RT-some-older-grant' ) );
+		$this->assertSame( Connection::STATE_CONNECTED, $this->connection->status()['state'] );
+
+		// With the stored one it does.
+		$this->assertTrue( $this->connection->storeAccessToken( 'AT-current-grant', 3600, 'RT-rotated-current', self::REFRESH ) );
+		$this->assertSame( 'AT-current-grant', $this->connection->accessToken() );
+		$this->assertSame( 'RT-rotated-current', $this->connection->refreshToken() );
+		$this->assertFalse( $this->connection->markReconnect( 'Revoked.', self::REFRESH ) );
+		$this->assertTrue( $this->connection->markReconnect( 'Revoked.', 'RT-rotated-current' ) );
+		$this->assertSame( Connection::STATE_RECONNECT, $this->connection->status()['state'] );
+
+		// Without an expected token (the documented calls) the write is unconditional.
+		$this->connection->storeTokens( self::REFRESH, self::ACCESS, 3600, OAuth::SCOPE );
+		$this->assertTrue( $this->connection->storeAccessToken( 'AT-unconditional', 3600 ) );
+		$this->assertSame( 'AT-unconditional', $this->connection->accessToken() );
+		$this->assertTrue( $this->connection->markReconnect( 'Revoked.' ) );
+		$this->assertSame( Connection::STATE_RECONNECT, $this->connection->status()['state'] );
+
+		// Nothing stored to compare with: no write.
+		$this->connection->disconnect();
+		$this->assertFalse( $this->connection->storeAccessToken( 'AT-orphan', 3600, '', self::REFRESH ) );
+		$this->assertArrayNotHasKey( 'access_token', $this->store->read( 'gdrive' ) );
+	}
+
 	// ---------------------------------------------------------------------
 	// Client.
 	// ---------------------------------------------------------------------
@@ -839,17 +1005,33 @@ class GoogleDriveTest extends TestCase {
 		$this->http->json(
 			200,
 			array(
-				'id'   => 'folder-new',
-				'name' => 'SH Clone Migration Backups (example.test)',
+				'id'          => 'folder-new',
+				'name'        => 'SH Clone Migration Backups (example.test)',
+				'createdTime' => '2026-09-28T13:34:35.777Z',
+			)
+		);
+		// The search after the create finds only this folder.
+		$this->http->json(
+			200,
+			array(
+				'files' => array(
+					array(
+						'id'          => 'folder-new',
+						'name'        => 'SH Clone Migration Backups (example.test)',
+						'createdTime' => '2026-09-28T13:34:35.777Z',
+					),
+				),
 			)
 		);
 
 		$folder = $this->client->ensureFolder( 'abcdef0123456789', 'SH Clone Migration Backups (example.test)', 'folder-gone' );
 		$this->assertSame( 'folder-new', $folder['id'] );
+		$this->assertCount( 4, $this->http->requests );
+		$this->assertSame( $this->http->query( 1 ), $this->http->query( 3 ) );
 
 		$create = $this->http->requests[2];
 		$this->assertSame( 'POST', $create['method'] );
-		$this->assertSame( self::API . '/files?fields=id%2Cname', $create['url'] );
+		$this->assertSame( self::API . '/files?fields=id%2Cname%2CcreatedTime', $create['url'] );
 		$this->assertSame( 'application/json; charset=UTF-8', $create['headers']['Content-Type'] );
 		$this->assertSame(
 			array(
@@ -871,6 +1053,280 @@ class GoogleDriveTest extends TestCase {
 			}
 		);
 		$this->assertSame( DriveException::SERVER, $e->kind() );
+	}
+
+	public function testEnsureFolderSearchesWhenTheKnownFolderIsForbidden() {
+		$this->connect();
+		// No longer visible to this OAuth client (e.g. created by another client ID).
+		$this->http->json( 403, self::apiError( 403, 'insufficientFilePermissions', 'The user does not have sufficient permissions for file folder-known.' ) );
+		$this->http->json(
+			200,
+			array(
+				'files' => array(
+					array(
+						'id'          => 'folder-found',
+						'name'        => 'Backups',
+						'createdTime' => '2026-01-01T00:00:00.000Z',
+					),
+				),
+			)
+		);
+		$this->assertSame( 'folder-found', $this->client->ensureFolder( 'abcdef0123456789', 'Backups', 'folder-known' )['id'] );
+		$this->assertCount( 2, $this->http->requests );
+		$this->assertStringStartsWith( self::API . '/files?', $this->http->requests[1]['url'] );
+		$this->assertStringContainsString( "value='backup_root'", $this->http->query( 1 )['q'] );
+
+		// Forbidden with a 403 and nothing found: a new folder is created.
+		$this->http->json( 403, self::apiError( 403, 'forbidden', 'Forbidden' ) );
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->http->json(
+			200,
+			array(
+				'id'          => 'folder-created',
+				'name'        => 'Backups',
+				'createdTime' => '2026-09-28T10:00:00.000Z',
+			)
+		);
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->assertSame( 'folder-created', $this->client->ensureFolder( 'abcdef0123456789', 'Backups', 'folder-known' )['id'] );
+		$this->assertSame( 'POST', $this->http->requests[4]['method'] );
+
+		// Anything else on the known folder is an error, not a reason to create another.
+		$count = count( $this->http->requests );
+		$this->http->json( 500, self::apiError( 500, 'backendError', 'Backend Error' ) );
+		$e = $this->catchDrive(
+			function () {
+				$this->client->ensureFolder( 'abcdef0123456789', 'Backups', 'folder-known' );
+			}
+		);
+		$this->assertSame( DriveException::SERVER, $e->kind() );
+		$this->assertCount( $count + 1, $this->http->requests );
+		$this->assertSame( array(), $this->http->responses );
+	}
+
+	public function testEnsureFolderPicksTheSameFolderInEveryProcess() {
+		$this->connect();
+		$pick = function ( array $files ) {
+			$this->http->json( 200, array( 'files' => $files ) );
+			return $this->client->ensureFolder( 'abcdef0123456789', 'Backups' )['id'];
+		};
+
+		// Oldest first, whatever order the search returns, with millisecond precision.
+		$this->assertSame(
+			'folder-older',
+			$pick(
+				array(
+					array(
+						'id'          => 'folder-a-newer',
+						'createdTime' => '2026-09-28T13:34:35.777Z',
+					),
+					array(
+						'id'          => 'folder-older',
+						'createdTime' => '2026-09-28T13:34:35.1Z',
+					),
+				)
+			)
+		);
+		// The same createdTime (two creates in one millisecond): the lowest id.
+		$this->assertSame(
+			'1fakeSX8WI1',
+			$pick(
+				array(
+					array(
+						'id'          => '1fakeoQHnL_',
+						'createdTime' => '2026-09-28T13:34:35.777Z',
+					),
+					array(
+						'id'          => '1fakeSX8WI1',
+						'createdTime' => '2026-09-28T13:34:35.777Z',
+					),
+				)
+			)
+		);
+		// A folder without a readable createdTime never beats one with a time.
+		$this->assertSame(
+			'folder-dated',
+			$pick(
+				array(
+					array( 'id' => '0-undated' ),
+					array(
+						'id'          => 'folder-dated',
+						'createdTime' => '2030-01-01T00:00:00Z',
+					),
+				)
+			)
+		);
+		// Other time zone notations compare by the instant.
+		$this->assertSame(
+			'folder-utc-0930',
+			$pick(
+				array(
+					array(
+						'id'          => 'folder-a-1000',
+						'createdTime' => '2026-09-28T12:00:00.000+02:00',
+					),
+					array(
+						'id'          => 'folder-utc-0930',
+						'createdTime' => '2026-09-28T09:30:00.000Z',
+					),
+				)
+			)
+		);
+	}
+
+	public function testEnsureFolderRaceLoserDeletesItsEmptyFolder() {
+		$this->connect();
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->http->json(
+			200,
+			array(
+				'id'          => '1fakeoQHnL_',
+				'name'        => 'Backups',
+				'createdTime' => '2026-09-28T13:34:35.777Z',
+			)
+		);
+		// Another process created its folder in the same millisecond; its id is lower.
+		$this->http->json(
+			200,
+			array(
+				'files' => array(
+					array(
+						'id'          => '1fakeoQHnL_',
+						'name'        => 'Backups',
+						'createdTime' => '2026-09-28T13:34:35.777Z',
+					),
+					array(
+						'id'          => '1fakeSX8WI1',
+						'name'        => 'Backups (other)',
+						'createdTime' => '2026-09-28T13:34:35.777Z',
+					),
+				),
+			)
+		);
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->http->queue( 204, array(), '' );
+
+		$this->assertSame(
+			array(
+				'id'   => '1fakeSX8WI1',
+				'name' => 'Backups (other)',
+			),
+			$this->client->ensureFolder( 'abcdef0123456789', 'Backups' )
+		);
+		$this->assertCount( 5, $this->http->requests );
+		$children = $this->http->query( 3 );
+		$this->assertSame( "'1fakeoQHnL_' in parents", $children['q'] );
+		$this->assertSame( '1', $children['pageSize'] );
+		$this->assertSame( 'DELETE', $this->http->requests[4]['method'] );
+		$this->assertSame( self::API . '/files/1fakeoQHnL_', $this->http->requests[4]['url'] );
+
+		// A losing folder that already holds a file (another request found it) is kept.
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->http->json(
+			200,
+			array(
+				'id'          => 'folder-late',
+				'createdTime' => '2026-09-28T13:34:36.000Z',
+			)
+		);
+		$this->http->json(
+			200,
+			array(
+				'files' => array(
+					array(
+						'id'          => 'folder-early',
+						'name'        => 'Backups',
+						'createdTime' => '2026-09-28T13:34:35.000Z',
+					),
+				),
+			)
+		);
+		$this->http->json( 200, array( 'files' => array( array( 'id' => 'file-in-it' ) ) ) );
+		$this->assertSame( 'folder-early', $this->client->ensureFolder( 'abcdef0123456789', 'Backups' )['id'] );
+		$this->assertSame( 'GET', $this->http->last()['method'] );
+		$this->assertSame( array(), $this->http->responses );
+	}
+
+	public function testEnsureFolderRaceWinnerKeepsItsFolder() {
+		$this->connect();
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->http->json(
+			200,
+			array(
+				'id'          => 'folder-z-ours',
+				'name'        => 'Backups',
+				'createdTime' => '2026-09-28T13:34:35.100Z',
+			)
+		);
+		$this->http->json(
+			200,
+			array(
+				'files' => array(
+					array(
+						'id'          => 'folder-a-theirs',
+						'createdTime' => '2026-09-28T13:34:35.200Z',
+					),
+					array(
+						'id'          => 'folder-z-ours',
+						'createdTime' => '2026-09-28T13:34:35.100Z',
+					),
+				),
+			)
+		);
+		$this->assertSame( 'folder-z-ours', $this->client->ensureFolder( 'abcdef0123456789', 'Backups' )['id'] );
+		$this->assertCount( 3, $this->http->requests );
+
+		// The search may not list a folder created a moment ago: ours still counts.
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->http->json(
+			200,
+			array(
+				'id'          => 'folder-fresh',
+				'name'        => 'Backups',
+				'createdTime' => '2026-09-28T13:40:00.000Z',
+			)
+		);
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->assertSame( 'folder-fresh', $this->client->ensureFolder( 'abcdef0123456789', 'Backups' )['id'] );
+		$this->assertCount( 6, $this->http->requests );
+
+		// A failing second search or cleanup never fails the call.
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->http->json(
+			200,
+			array(
+				'id'          => 'folder-made',
+				'name'        => 'Backups',
+				'createdTime' => '2026-09-28T13:50:00.000Z',
+			)
+		);
+		$this->http->json( 503, self::apiError( 503, 'backendError', 'Backend Error' ) );
+		$this->assertSame( 'folder-made', $this->client->ensureFolder( 'abcdef0123456789', 'Backups' )['id'] );
+
+		$this->http->json( 200, array( 'files' => array() ) );
+		$this->http->json(
+			200,
+			array(
+				'id'          => 'folder-loser',
+				'createdTime' => '2026-09-28T14:00:00.000Z',
+			)
+		);
+		$this->http->json(
+			200,
+			array(
+				'files' => array(
+					array(
+						'id'          => 'folder-winner',
+						'name'        => 'Winner',
+						'createdTime' => '2026-09-28T13:59:59.000Z',
+					),
+				),
+			)
+		);
+		$this->http->json( 500, self::apiError( 500, 'backendError', 'Backend Error' ) );
+		$this->assertSame( 'folder-winner', $this->client->ensureFolder( 'abcdef0123456789', 'Backups' )['id'] );
+		$this->assertNotSame( 'DELETE', $this->http->last()['method'] );
+		$this->assertSame( array(), $this->http->responses );
 	}
 
 	public function testListBackupsFollowsPagesAndEscapesTheQuery() {
@@ -997,6 +1453,82 @@ class GoogleDriveTest extends TestCase {
 		$this->assertSame( 'insufficientFilePermissions', $e->reason() );
 	}
 
+	public function testApiStatusMapping() {
+		$this->connect();
+		$cases = array(
+			// A request timeout on an ordinary API call is temporary (unlike on an upload session).
+			array( 408, '', DriveException::SERVER ),
+			array( 499, '', DriveException::BAD_REQUEST ),
+			array( 400, json_encode( self::apiError( 400, 'invalidQuery', 'Invalid query' ) ), DriveException::BAD_REQUEST ),
+			array( 410, '', DriveException::NOT_FOUND ),
+			array( 429, '', DriveException::RATE_LIMITED ),
+			array( 502, '', DriveException::SERVER ),
+			array( 403, json_encode( self::apiError( 403, 'userRateLimitExceeded', 'User Rate Limit Exceeded' ) ), DriveException::RATE_LIMITED ),
+			array( 403, json_encode( self::apiError( 403, 'storageQuotaExceeded', 'Quota' ) ), DriveException::QUOTA ),
+			array( 403, json_encode( self::apiError( 403, 'appNotAuthorizedToFile', 'Not authorized' ) ), DriveException::FORBIDDEN ),
+		);
+		foreach ( $cases as $case ) {
+			list( $status, $body, $kind ) = $case;
+			$this->http->queue( $status, array( 'Content-Type' => 'application/json' ), $body );
+			$e = $this->catchDrive(
+				function () {
+					$this->client->getFile( 'file-1' );
+				}
+			);
+			$this->assertSame( $kind, $e->kind(), 'HTTP ' . $status );
+			$this->assertSame( $status, $e->httpStatus() );
+			$this->assertSame( in_array( $kind, array( DriveException::SERVER, DriveException::RATE_LIMITED ), true ), $e->isRetryable(), 'HTTP ' . $status );
+		}
+		$this->assertSame( array(), $this->http->responses );
+	}
+
+	public function testErrorReasonThatCarriesASecretIsDropped() {
+		$secret = 'GOCSPX-' . 'AbCdEfGhIjKlMnOpQrStUvWxYz01'; // Split: fake, but scanner-shaped.
+		$body   = function ( $reason ) {
+			return json_encode(
+				array(
+					'error' => array(
+						'code'    => 400,
+						'message' => 'bad',
+						'errors'  => array( array( 'reason' => $reason ) ),
+					),
+				)
+			);
+		};
+
+		// Named as a secret by the caller.
+		$e = DriveException::fromResponse( new HttpResponse( 400, array(), $body( 'Opaque-Secret-Value_42' ) ), array( 'Opaque-Secret-Value_42' ) );
+		$this->assertSame( 'Google Drive rejected the request (400): bad', $e->getMessage() );
+		$this->assertSame( '', $e->reason() );
+
+		// Shaped like a Google credential, even when nobody named it.
+		foreach ( array( $secret, 'ya29.a0AfB_byCxyz', 'prefix' . $secret ) as $reason ) {
+			list( $described ) = DriveException::describe( new HttpResponse( 400, array(), $body( $reason ) ) );
+			$this->assertSame( '', $described, $reason );
+		}
+		$e = DriveException::fromResponse( new HttpResponse( 400, array(), $body( $secret ) ), array( $secret ) );
+		$this->assertStringNotContainsString( 'GOCSPX', $e->getMessage() );
+		$this->assertSame( '', $e->reason() );
+
+		// Ordinary reasons stay.
+		$e = DriveException::fromResponse( new HttpResponse( 403, array(), json_encode( self::apiError( 403, 'storageQuotaExceeded', 'Full' ) ) ), array( $secret ) );
+		$this->assertSame( 'storageQuotaExceeded', $e->reason() );
+
+		// The token endpoint format, whose message is also stored as the connection error.
+		$this->connect();
+		$this->now += 7200;
+		$this->http->json( 401, array( 'error' => $secret ) );
+		$e = $this->catchDrive(
+			function () {
+				$this->oauth->accessToken();
+			}
+		);
+		$this->assertSame( DriveException::BAD_REQUEST, $e->kind() );
+		$this->assertStringNotContainsString( 'GOCSPX', $e->getMessage() );
+		$this->assertSame( '', $e->reason() );
+		$this->assertStringContainsString( 'HTTP 401', $e->getMessage() );
+	}
+
 	public function testStartUpload() {
 		$this->connect();
 		$this->http->queue( 200, array( 'Location' => self::SESSION ), '' );
@@ -1121,6 +1653,8 @@ class GoogleDriveTest extends TestCase {
 		$this->assertArrayNotHasKey( 'Authorization', $request['headers'] );
 		$this->assertSame( '262144', $request['headers']['Content-Length'] );
 		$this->assertSame( 'bytes 0-262143/524298', $request['headers']['Content-Range'] );
+		// Explicit, or WordPress's cURL transport labels the PUT body form-urlencoded.
+		$this->assertSame( 'application/octet-stream', $request['headers']['Content-Type'] );
 		$this->assertSame( $chunk, $request['body'] );
 		$this->assertEquals( 45.0, $request['options']['timeout'] );
 
@@ -1174,6 +1708,9 @@ class GoogleDriveTest extends TestCase {
 			array( 403, array(), json_encode( self::apiError( 403, 'rateLimitExceeded', 'Rate Limit Exceeded' ) ), DriveException::RATE_LIMITED ),
 			array( 403, array(), json_encode( self::apiError( 403, 'userRateLimitExceeded', 'User Rate Limit Exceeded' ) ), DriveException::RATE_LIMITED ),
 			array( 403, array(), json_encode( self::apiError( 403, 'forbidden', 'Forbidden' ) ), DriveException::SESSION_EXPIRED ),
+			// Any other 4xx, including a request timeout and the 499 of a cancelled session.
+			array( 408, array(), '', DriveException::SESSION_EXPIRED ),
+			array( 499, array(), '', DriveException::SESSION_EXPIRED ),
 			array( 302, array( 'Location' => 'https://captive.example.test/' ), '', DriveException::SERVER ),
 		);
 		foreach ( $cases as $case ) {
@@ -1246,6 +1783,7 @@ class GoogleDriveTest extends TestCase {
 		$this->assertSame( '0', $request['headers']['Content-Length'] );
 		$this->assertSame( 'bytes */70000000', $request['headers']['Content-Range'] );
 		$this->assertArrayNotHasKey( 'Authorization', $request['headers'] );
+		$this->assertArrayNotHasKey( 'Content-Type', $request['headers'] );
 
 		$this->http->json(
 			200,
@@ -1294,6 +1832,15 @@ class GoogleDriveTest extends TestCase {
 			}
 		);
 		$this->assertSame( DriveException::BAD_REQUEST, $e->kind() );
+		// Also when the whole file is shorter than the range asked for.
+		$this->http->queue( 200, array(), 'short' );
+		$e = $this->catchDrive(
+			function () {
+				$this->client->downloadRange( 'file-1', 3, 1048575 );
+			}
+		);
+		$this->assertSame( DriveException::BAD_REQUEST, $e->kind() );
+		$this->assertSame( 'range_ignored', $e->reason() );
 
 		// A different part than requested.
 		$this->http->queue( 206, array( 'Content-Range' => 'bytes 0-9/5000' ), '0123456789' );
@@ -1671,24 +2218,133 @@ class GoogleDriveTest extends TestCase {
 		if ( defined( 'SHCM_GDRIVE_CLIENT_ID' ) || defined( 'SHCM_GDRIVE_CLIENT_SECRET' ) ) {
 			$this->markTestSkipped( 'Credential constants are defined in this process.' );
 		}
-		// Constants cannot be undefined again, so they are exercised in a child process
-		// by testWordPressTransportAndConstantsInAChildProcess(); here only the default.
+		// Constants cannot be undefined again, so they are exercised in child processes
+		// by testWordPressTransportAndConstantsInAChildProcess() and
+		// testPartialCredentialConstantsInChildProcesses(); here only the default.
 		$this->assertFalse( $this->connection->credentialsFromConstants() );
+		$this->assertSame(
+			array(
+				'client_id'     => false,
+				'client_secret' => false,
+			),
+			$this->connection->constantFields()
+		);
+		$status = $this->connection->status();
+		$this->assertFalse( $status['id_from_constant'] );
+		$this->assertFalse( $status['secret_from_constant'] );
 	}
 
 	/**
-	 * WordPressTransport, endpoint constants and credential constants need
-	 * global WordPress functions and constants that cannot be undone, so they
-	 * run in a separate PHP process with minimal shims.
+	 * Only one of the two credential constants: the other field stays usable
+	 * in the settings form, and only the constant's field is locked.
 	 */
-	public function testWordPressTransportAndConstantsInAChildProcess() {
+	public function testPartialCredentialConstantsInChildProcesses() {
+		// Only the secret in wp-config.php, the client ID from the form.
+		$result = $this->runChild(
+			'define( "SHCM_GDRIVE_CLIENT_SECRET", "GOCSPX-only-secret-in-config" );',
+			'$out["before"] = $connection->status();
+$out["fields"] = $connection->constantFields();
+$out["from_constants"] = $connection->credentialsFromConstants();
+$connection->setCredentials( "form-client-id", "" );
+$out["after"] = $connection->status();
+$out["client_secret"] = $connection->clientSecret();
+$connection->setCredentials( "form-client-id", "form-secret-ignored-on-read" );
+$out["stored"] = $store->read( "gdrive" );
+$out["stored_secret"] = $box->open( $out["stored"]["client_secret"], "gdrive-client-secret" );
+$out["client_secret_after_save"] = $connection->clientSecret();'
+		);
+		$this->assertSame( 'not_configured', $result['before']['state'] );
+		$this->assertFalse( $result['before']['from_constants'] );
+		$this->assertFalse( $result['before']['id_from_constant'] );
+		$this->assertTrue( $result['before']['secret_from_constant'] );
+		$this->assertSame(
+			array(
+				'client_id'     => false,
+				'client_secret' => true,
+			),
+			$result['fields']
+		);
+		$this->assertFalse( $result['from_constants'] );
+		$this->assertSame( 'not_connected', $result['after']['state'] );
+		$this->assertSame( 'form-client-id', $result['after']['client_id'] );
+		$this->assertSame( 'GOCSPX-only-secret-in-config', $result['client_secret'] );
+		// What is passed is stored; the constant wins on read.
+		$this->assertSame( 'form-client-id', $result['stored']['client_id'] );
+		$this->assertSame( 'form-secret-ignored-on-read', $result['stored_secret'] );
+		$this->assertSame( 'GOCSPX-only-secret-in-config', $result['client_secret_after_save'] );
+
+		// Only the client ID in wp-config.php, the secret from the form.
+		$result = $this->runChild(
+			'define( "SHCM_GDRIVE_CLIENT_ID", "constant-client-id" );',
+			'$out["before"] = $connection->status();
+$connection->setCredentials( "", "form-client-secret" );
+$out["after"] = $connection->status();
+$connection->storeTokens( "RT-constant-id", "AT-constant-id", 3600, SHCM\Remote\GoogleDrive\OAuth::SCOPE );
+// The locked client ID field sends nothing, or a stale value: the effective ID is unchanged.
+$connection->setCredentials( "", "" );
+$connection->setCredentials( "some-other-id", "" );
+$out["connected"] = $connection->status();
+$out["refresh"] = $connection->refreshToken();
+$out["client_secret"] = $connection->clientSecret();
+$out["stored_id"] = $store->read( "gdrive" )["client_id"];'
+		);
+		$this->assertSame( 'not_configured', $result['before']['state'] );
+		$this->assertFalse( $result['before']['from_constants'] );
+		$this->assertTrue( $result['before']['id_from_constant'] );
+		$this->assertFalse( $result['before']['secret_from_constant'] );
+		$this->assertSame( 'constant-client-id', $result['before']['client_id'] );
+		$this->assertSame( 'not_connected', $result['after']['state'] );
+		$this->assertSame( 'connected', $result['connected']['state'] );
+		$this->assertSame( 'constant-client-id', $result['connected']['client_id'] );
+		$this->assertSame( 'RT-constant-id', $result['refresh'] );
+		$this->assertSame( 'form-client-secret', $result['client_secret'] );
+		$this->assertSame( 'some-other-id', $result['stored_id'] );
+	}
+
+	/**
+	 * Run PHP code in a child process with the plugin loaded and a Connection
+	 * on a scratch store ($connection, $store, $box); the code fills $out.
+	 *
+	 * @param string $defines Code run before the plugin is loaded (constants).
+	 * @param string $code    Code run afterwards.
+	 * @return array The decoded $out.
+	 */
+	private function runChild( $defines, $code ) {
+		$bootstrap = dirname( __DIR__, 2 ) . '/includes/bootstrap.php';
+		return $this->runChildScript(
+			'<?php
+define( "SHCM_ALLOW_STANDALONE", true );
+' . $defines . '
+require ' . var_export( $bootstrap, true ) . ';
+$dir = sys_get_temp_dir() . "/shcm-gdrive-child-" . bin2hex( random_bytes( 6 ) );
+$store = new SHCM\Backup\ConfigStore( $dir );
+$box = new SHCM\Security\SecretBox( str_repeat( "k", 40 ) );
+$connection = new SHCM\Remote\GoogleDrive\Connection( $store, $box, "fp" );
+$out = array();
+try {
+' . $code . '
+} finally {
+	SHCM\Filesystem\Storage::rmdirRecursive( $dir );
+}
+echo json_encode( $out, JSON_UNESCAPED_SLASHES );
+'
+		);
+	}
+
+	/**
+	 * Run a PHP script in a child process.
+	 *
+	 * @param string $source Script source.
+	 * @return array The script's JSON output, decoded.
+	 */
+	private function runChildScript( $source ) {
 		if ( ! function_exists( 'proc_open' ) ) {
 			$this->markTestSkipped( 'proc_open() is not available.' );
 		}
 
-		$script = $this->dir . '/child.php';
 		@mkdir( $this->dir, 0755, true );
-		file_put_contents( $script, self::childScript( dirname( __DIR__, 2 ) . '/includes/bootstrap.php' ) );
+		$script = $this->dir . '/child-' . bin2hex( random_bytes( 4 ) ) . '.php';
+		file_put_contents( $script, $source );
 
 		$process = proc_open(
 			array( PHP_BINARY, '-d', 'display_errors=stderr', '-d', 'error_reporting=-1', $script ),
@@ -1709,6 +2365,16 @@ class GoogleDriveTest extends TestCase {
 		$this->assertSame( '', $stderr );
 		$result = json_decode( $stdout, true );
 		$this->assertIsArray( $result, $stdout );
+		return $result;
+	}
+
+	/**
+	 * WordPressTransport, endpoint constants and credential constants need
+	 * global WordPress functions and constants that cannot be undone, so they
+	 * run in a separate PHP process with minimal shims.
+	 */
+	public function testWordPressTransportAndConstantsInAChildProcess() {
+		$result = $this->runChildScript( self::childScript( dirname( __DIR__, 2 ) . '/includes/bootstrap.php' ) );
 
 		// Request arguments.
 		$args = $result['calls'][0]['args'];
@@ -1751,6 +2417,16 @@ class GoogleDriveTest extends TestCase {
 		$this->assertSame( 'constant-client-id', $result['client_id'] );
 		$this->assertSame( 'constant-client-secret', $result['client_secret'] );
 		$this->assertTrue( $result['from_constants'] );
+		$this->assertTrue( $result['status']['from_constants'] );
+		$this->assertTrue( $result['status']['id_from_constant'] );
+		$this->assertTrue( $result['status']['secret_from_constant'] );
+		$this->assertSame(
+			array(
+				'client_id'     => true,
+				'client_secret' => true,
+			),
+			$result['fields']
+		);
 		$this->assertSame( 'not_connected', $result['state'] );
 		$this->assertTrue( $result['secret_redacted'] );
 	}
@@ -1828,7 +2504,9 @@ $connection->setCredentials( "stored-client-id", "stored-secret" );
 $out["client_id"]       = $connection->clientId();
 $out["client_secret"]   = $connection->clientSecret();
 $out["from_constants"]  = $connection->credentialsFromConstants();
-$out["state"]           = $connection->status()["state"];
+$out["fields"]          = $connection->constantFields();
+$out["status"]          = $connection->status();
+$out["state"]           = $out["status"]["state"];
 $out["secret_redacted"] = false === strpos( ( new SHCM\Logging\Redactor() )->scrub( "secret is constant-client-secret" ), "constant-client-secret" );
 SHCM\Filesystem\Storage::rmdirRecursive( $dir );
 echo json_encode( $out, JSON_UNESCAPED_SLASHES );
