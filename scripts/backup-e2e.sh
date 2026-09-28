@@ -159,6 +159,9 @@ kind=$(fstate | jq -r --arg id "$FID1" '.files[] | select(.id==$id) | .appProper
 is "Drive file tagged as a backup of this site" "$kind" "backup"
 mails=$(grep -c 'Backup completed' "$ROOT/wp-content/shcm-test-mail.log" 2>/dev/null)
 is "success e-mail sent (notify: always)" "$mails" "1"
+dl=$(ajax backup_status | jq -r --arg id "$JOB1" '.data.history[] | select(.id==$id) | .download')
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "$H" "${dl/http:\/\/$HOSTNAME_PORT/$BASE}")
+is "the history's Download link downloads the backup" "$code" "200"
 
 echo
 echo "--- 4. Scheduled runs through WP-Cron over HTTP -----------------"

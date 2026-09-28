@@ -564,6 +564,12 @@ class Environment {
 		}
 		$warnings = array();
 		$config   = $summary['config'];
+		if ( ! empty( $summary['weak_keys'] ) ) {
+			$warnings[] = array(
+				'level'   => 'warning',
+				'message' => __( 'The security keys in wp-config.php are missing or still the sample values, so the Google Drive tokens and the backup password are sealed with keys kept in the database, which is inside every backup. Add real keys to wp-config.php (or define SHCM_SECRET_KEY), then reconnect Google Drive and enter the backup password again.', 'sh-clone-migration' ),
+			);
+		}
 		foreach ( isset( $summary['problems'] ) ? (array) $summary['problems'] : array() as $problem ) {
 			$warnings[] = array(
 				'level'   => 'error',

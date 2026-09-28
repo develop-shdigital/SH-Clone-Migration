@@ -337,6 +337,11 @@ class BackupManager {
 			$password          = (string) $password;
 			$state['password'] = '' === $password ? null : $this->box()->seal( $password, self::PASSWORD_CTX );
 		}
+		if ( empty( $config['encrypt'] ) ) {
+			// Encryption off: the password is not kept (a running encrypted
+			// backup has its own sealed copy in its job).
+			$state['password'] = null;
+		}
 		if ( ! empty( $config['encrypt'] ) && null === $this->backupPassword( $state ) ) {
 			throw new \InvalidArgumentException( __( 'Enter the password for encrypted backups (and keep it safe: without it the backups cannot be restored).', 'sh-clone-migration' ) );
 		}
@@ -1362,6 +1367,7 @@ class BackupManager {
 			'drive'        => $this->connection()->status(),
 			'main_site'    => $this->isMainSite(),
 			'problems'     => $this->storageProblems(),
+			'weak_keys'    => $this->box()->isDatabaseDerived(),
 		);
 	}
 

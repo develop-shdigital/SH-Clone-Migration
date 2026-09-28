@@ -257,7 +257,8 @@ class BackupController {
 	 * @return array
 	 */
 	public function disconnect() {
-		$this->backups()->oauth()->revoke();
+		$was     = $this->backups()->connection()->status();
+		$revoked = 'other_site' === $was['state'] || $this->backups()->oauth()->revoke();
 		$this->backups()->connection()->disconnect();
 		$config = $this->backups()->config();
 		if ( ! empty( $config['gdrive'] ) ) {
@@ -266,7 +267,13 @@ class BackupController {
 			$config['keep_local'] = max( 1, (int) $config['keep_local'] );
 			$this->backups()->saveSchedule( $config );
 		}
-		return $this->status();
+		$status = $this->status();
+		if ( ! $revoked ) {
+			// Google did not confirm (offline, a server error): the stored token
+			// is gone either way, so the owner has to remove the access there.
+			$status['notice'] = __( 'Disconnected here, but Google did not confirm that the access was removed. Remove "SH Clone Migration" (or your OAuth client\'s name) at https://myaccount.google.com/permissions.', 'sh-clone-migration' );
+		}
+		return $status;
 	}
 
 	/**
@@ -409,7 +416,16 @@ class BackupController {
 				'warnings'  => isset( $entry['warnings'] ) ? (int) $entry['warnings'] : 0,
 				'remote'    => isset( $entry['remote'] ) && is_array( $entry['remote'] ) ? $entry['remote'] : array(),
 				'job'       => 0 === strpos( (string) $entry['id'], 'skipped-' ) || 0 === strpos( (string) $entry['id'], 'failed-' ) ? '' : (string) $entry['id'],
-				'download'  => $present ? wp_nonce_url( admin_url( 'admin-post.php?action=shcm_download&archive=' . rawurlencode( $archive ) ), 'shcm_download' ) : '',
+				// A plain URL: the script escapes what it puts into the page
+				// (wp_nonce_url() returns one already escaped for HTML).
+				'download'  => $present ? add_query_arg(
+					array(
+						'action'   => 'shcm_download',
+						'archive'  => rawurlencode( $archive ),
+						'_wpnonce' => wp_create_nonce( 'shcm_download' ),
+					),
+					admin_url( 'admin-post.php' )
+				) : '',
 			);
 		}
 		return $rows;

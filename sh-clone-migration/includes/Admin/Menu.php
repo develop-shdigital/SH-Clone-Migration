@@ -216,6 +216,7 @@ class Menu {
 				'nextIn'             => __( 'in %s', 'sh-clone-migration' ),
 				'anyMoment'          => __( 'Any moment now', 'sh-clone-migration' ),
 				'confirmCancel'      => __( 'Cancel this backup?', 'sh-clone-migration' ),
+				'weakKeys'           => __( 'The security keys in wp-config.php are missing or still the sample values, so the Google Drive tokens and the backup password are sealed with keys kept in the database, which is inside every backup. Add real keys to wp-config.php (or define SHCM_SECRET_KEY), then reconnect and enter the password again.', 'sh-clone-migration' ),
 				/* translators: 1: schedule, e.g. "Daily at 03:15", 2: date and time of the next backup */
 				'nextLabel'          => __( '%1$s · next %2$s', 'sh-clone-migration' ),
 				'onDemand'           => __( 'On demand', 'sh-clone-migration' ),

@@ -10,8 +10,8 @@ namespace SHCM\Backup;
 defined( 'ABSPATH' ) || defined( 'SHCM_ALLOW_STANDALONE' ) || exit;
 
 /**
- * A fingerprint of the installation, taken from values that come from
- * wp-config.php and the filesystem rather than from the database.
+ * A fingerprint of the installation: its directory, database name and table
+ * prefix (from wp-config.php and the filesystem) and its address.
  *
  * The schedule and the Drive connection remember the fingerprint of the site
  * that set them up. A copy of the site made by other means (a host's staging

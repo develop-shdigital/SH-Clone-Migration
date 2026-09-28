@@ -475,8 +475,12 @@ field, so one sealed value cannot be moved into another field. A value copied
 to another site simply does not open there and reads as "not connected".
 
 **Copies of the site.** The schedule and the connection record a fingerprint
-of the installation built from `wp-config.php` and the filesystem (ABSPATH,
-database name and host, table prefix, home URL). A copy made by other means
+of the installation: the real path of ABSPATH, the database name, the table
+prefix and the home URL (the network's on multisite; it comes from the
+database unless `WP_HOME` is set). The database host is left out on purpose,
+because hosts rewrite it ("localhost" becoming "127.0.0.1") while the site
+stays the same; a copy on another database server with the same path, name,
+prefix and address is therefore not told apart. A copy made by other means
 (a host's staging tool) has a different fingerprint: its schedule is paused
 and its connection is not used until an administrator confirms "this is the
 same site". Reconnecting on the copy gives it a new site id, so it never

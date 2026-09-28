@@ -233,8 +233,10 @@ else.
 
 = What happens to backups on Google Drive when I disconnect or uninstall? =
 
-They stay on your Drive. Disconnecting (and uninstalling) revokes the
-plugin's access; the files themselves are yours.
+They stay on your Drive. Disconnecting (and uninstalling) asks Google to
+revoke the plugin's access and deletes its stored tokens; if Google cannot be
+reached, the screen tells you to remove the access in your Google account's
+permissions. The files themselves are yours.
 
 = What if a backup is restored onto another site, or the site is cloned? =
 

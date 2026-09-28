@@ -155,7 +155,10 @@ class DriveCommands {
 		\WP_CLI::confirm( 'Disconnect Google Drive? New backups will be kept on this server only.', $assoc_args );
 		$this->guard(
 			function () {
-				$this->screen()->disconnect();
+				$status = $this->screen()->disconnect();
+				if ( ! empty( $status['notice'] ) ) {
+					\WP_CLI::warning( $status['notice'] );
+				}
 				\WP_CLI::success( 'Google Drive disconnected.' );
 			}
 		);

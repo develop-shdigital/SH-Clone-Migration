@@ -1400,6 +1400,9 @@
 			( schedule.problems || [] ).forEach( function ( problem ) {
 				html += alertBox( 'error', escapeHtml( problem ) );
 			} );
+			if ( schedule.weak_keys && ( config.encrypt || drive.state === 'connected' ) ) {
+				html += alertBox( 'warning', escapeHtml( L.weakKeys ) );
+			}
 			if ( ! schedule.main_site ) {
 				html += alertBox( 'info', escapeHtml( L.networkOnly ) );
 			}
@@ -1508,7 +1511,7 @@
 				} ).join( '' ) +
 				'</tr></thead><tbody>' + rows.map( function ( row ) {
 					var local = row.present
-						? tag( L.kept, 'ok' ) + ( row.download ? ' <a href="' + escapeHtml( row.download ) + '">' + escapeHtml( L.download ) + '</a>' : '' )
+						? tag( L.kept, 'ok' ) + ( row.download ? ' <a href="' + escapeHtml( row.download.replace( /&amp;/g, '&' ) ) + '">' + escapeHtml( L.download ) + '</a>' : '' )
 						: ( row.status === 'success' || row.status === 'partial' ? tag( L.removedRetention ) : '—' );
 					return '<tr data-job="' + escapeHtml( row.id ) + '">' +
 						'<td>' + escapeHtml( row.date ) + '</td>' +
@@ -1519,7 +1522,7 @@
 						'<td>' + ( row.size ? formatBytes( row.size ) : '—' ) + '</td>' +
 						'<td>' + local + '</td>' +
 						'<td>' + driveCell( row ) + '</td>' +
-						'<td class="shcm-actions">' + ( row.job ? '<a class="button button-small" href="' + escapeHtml( data.logUrl + '&job_id=' + encodeURIComponent( row.job ) ) + '">' + escapeHtml( L.log ) + '</a>' : '' ) + '</td>' +
+						'<td class="shcm-actions">' + ( row.job ? '<a class="button button-small" href="' + escapeHtml( data.logUrl.replace( /&amp;/g, '&' ) + '&job_id=' + encodeURIComponent( row.job ) ) + '">' + escapeHtml( L.log ) + '</a>' : '' ) + '</td>' +
 						'</tr>';
 				} ).join( '' ) + '</tbody></table></div>';
 		}
@@ -1697,6 +1700,9 @@
 					api( 'gdrive_disconnect', {} ).then( function ( next ) {
 						status = next;
 						render();
+						if ( next.notice ) {
+							feedback( $( '#shcm-gdrive-message' ), next.notice, true );
+						}
 					} ).catch( function ( error ) {
 						window.alert( error.message );
 					} );

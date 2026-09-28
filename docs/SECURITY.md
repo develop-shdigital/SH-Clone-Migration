@@ -190,8 +190,10 @@ Nothing here is home-grown. No custom cipher, no custom construction.
   carry a `state` that was issued to the same logged-in user less than 15
   minutes earlier (a random 192-bit value, stored hashed, compared in constant
   time, usable once), and the user must have the plugin's capability. A
-  replayed callback cannot break a working connection. Disconnecting revokes
-  the grant at Google.
+  replayed callback cannot break a working connection. Disconnecting asks
+  Google to revoke the grant and deletes the stored tokens; when Google does
+  not confirm (offline, a server error), the screen and WP-CLI say so and
+  point to the Google account's permissions page.
 * **Secrets at rest.** The client secret, the refresh and access tokens, the
   upload session URI (itself a credential) and the password of encrypted
   backups are sealed with XChaCha20-Poly1305 or AES-256-GCM under keys derived
@@ -199,11 +201,13 @@ Nothing here is home-grown. No custom cipher, no custom construction.
   They are kept in `wp-content/shcm-storage/config/`, never in the database,
   so they are never part of an export, an import or a rollback point. When the
   salts are missing from `wp-config.php` the key has to come from salts in the
-  database; System Status says so. `SHCM_SECRET_KEY` can supply a dedicated key.
+  database; System Status and the Scheduled Backups screen say so.
+  `SHCM_SECRET_KEY` can supply a dedicated key.
 * **Stored backup password.** An exception to "migration passwords are never
   stored": unattended encrypted backups need the password. It is stored only
-  when the owner switches encryption on, sealed as above, and can be removed
-  by switching encryption off.
+  when the owner switches encryption on, sealed as above, and is deleted when
+  encryption is switched off. A running encrypted backup keeps its own sealed
+  copy in its job file, which is never sent to the browser.
 * **Copies of the site.** A copy made by other means cannot use the original's
   connection or run its schedule until an administrator confirms (see
   ARCHITECTURE.md, "Scheduled backups").
@@ -230,8 +234,8 @@ support tickets, so every line passes through a redactor before it is written:
 ## Uninstall
 
 `uninstall.php` never deletes website content. It removes scheduled events and
-a stale maintenance flag unconditionally, and on every uninstall it revokes the
-Google Drive grant (best effort) and deletes the stored tokens, keeping only
+a stale maintenance flag unconditionally, and on every uninstall it asks Google to
+revoke the Drive grant (best effort) and deletes the stored tokens, keeping only
 the site's random backup identity so that earlier backups on Drive are found
 again after a reinstall; backups on Drive are never deleted. Only when the
 administrator has explicitly ticked the setting does it remove the plugin's
