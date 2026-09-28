@@ -64,7 +64,24 @@ class Ajax {
 		'upload_finish',
 		'upload_abort',
 		'adopt_archive',
+		'backup_status',
+		'save_schedule',
+		'start_backup',
+		'backup_upload',
+		'backup_adopt',
+		'gdrive_credentials',
+		'gdrive_connect',
+		'gdrive_disconnect',
+		'gdrive_test',
+		'gdrive_list',
 	);
+
+	/**
+	 * Scheduled Backups controller.
+	 *
+	 * @var BackupController|null
+	 */
+	protected $backups;
 
 	/**
 	 * Constructor.
@@ -272,9 +289,63 @@ class Ajax {
 
 			case 'adopt_archive':
 				return $this->adoptArchive();
+
+			case 'backup_status':
+				return $this->backups()->status();
+
+			case 'save_schedule':
+				$schedule = isset( $_POST['schedule'] ) ? wp_unslash( $_POST['schedule'] ) : array(); // phpcs:ignore WordPress.Security -- sanitised by Schedule::sanitize().
+				if ( is_string( $schedule ) ) {
+					$schedule = json_decode( $schedule, true );
+				}
+				return $this->backups()->saveSchedule(
+					is_array( $schedule ) ? $schedule : array(),
+					Request::boolean( 'set_password' ) ? Request::raw( 'password' ) : null
+				);
+
+			case 'start_backup':
+				$input = array();
+				if ( isset( $_POST['gdrive'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- checked in authorize().
+					$input['gdrive'] = Request::boolean( 'gdrive' );
+				}
+				$input['contents'] = Request::text( 'contents' );
+				return $this->backups()->startBackup( $input );
+
+			case 'backup_upload':
+				return $this->backups()->upload( Request::text( 'archive' ), Request::text( 'history_id' ) );
+
+			case 'backup_adopt':
+				return $this->backups()->adopt();
+
+			case 'gdrive_credentials':
+				return $this->backups()->saveCredentials( Request::text( 'client_id' ), Request::raw( 'client_secret' ) );
+
+			case 'gdrive_connect':
+				return $this->backups()->connectUrl();
+
+			case 'gdrive_disconnect':
+				return $this->backups()->disconnect();
+
+			case 'gdrive_test':
+				return $this->backups()->test();
+
+			case 'gdrive_list':
+				return $this->backups()->listDrive();
 		}
 
 		throw new \RuntimeException( __( 'Unknown action.', 'sh-clone-migration' ) );
+	}
+
+	/**
+	 * Scheduled Backups controller.
+	 *
+	 * @return BackupController
+	 */
+	protected function backups() {
+		if ( null === $this->backups ) {
+			$this->backups = new BackupController( $this->plugin, $this->controller );
+		}
+		return $this->backups;
 	}
 
 	/**

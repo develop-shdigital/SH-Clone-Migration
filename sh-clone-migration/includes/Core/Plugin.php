@@ -82,16 +82,28 @@ class Plugin {
 		if ( is_admin() ) {
 			( new Menu( $this ) )->register();
 			( new Notices( $this ) )->register();
+			if ( self::backupsAvailable() ) {
+				( new \SHCM\Admin\DriveAuth( $this ) )->register();
+			}
 			add_action( 'admin_init', array( ServerRules::class, 'maybeInstall' ) );
 		}
 
 		( new Ajax( $this ) )->register();
 		( new Rest( $this ) )->register();
 		( new Scheduler( $this ) )->register();
+		// Work in progress: scheduled backups switch on once every part of
+		// the feature is in place.
+		if ( self::backupsAvailable() ) {
+			$this->backups()->register();
+		}
 
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			\WP_CLI::add_command( 'shcm', \SHCM\CLI\Commands::class );
 			\WP_CLI::add_command( 'sh-migration', \SHCM\CLI\Commands::class );
+			foreach ( self::backupsAvailable() ? array( 'shcm', 'sh-migration' ) : array() as $shcm_root ) {
+				\WP_CLI::add_command( $shcm_root . ' backup', \SHCM\CLI\BackupCommands::class );
+				\WP_CLI::add_command( $shcm_root . ' gdrive', \SHCM\CLI\DriveCommands::class );
+			}
 		}
 	}
 
@@ -227,6 +239,34 @@ class Plugin {
 			'runner',
 			function () {
 				return new JobRunner( $this->jobs(), $this->registry(), $this->logger(), $this->settings() );
+			}
+		);
+	}
+
+	/**
+	 * Whether every part of the scheduled-backup feature is present.
+	 *
+	 * @return bool
+	 */
+	public static function backupsAvailable() {
+		foreach ( array( '\SHCM\Backup\Schedule', '\SHCM\Remote\GoogleDrive\Client', '\SHCM\CLI\BackupCommands', '\SHCM\CLI\DriveCommands', '\SHCM\Jobs\JobLock' ) as $class ) {
+			if ( ! class_exists( $class ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Scheduled and on-demand backups.
+	 *
+	 * @return \SHCM\Backup\BackupManager
+	 */
+	public function backups() {
+		return $this->service(
+			'backups',
+			function () {
+				return new \SHCM\Backup\BackupManager( $this );
 			}
 		);
 	}

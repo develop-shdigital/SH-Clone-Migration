@@ -330,7 +330,9 @@ class Controller {
 	 */
 	public function resumable() {
 		foreach ( $this->plugin->jobs()->all( null, 10 ) as $job ) {
-			if ( $job->isRunnable() && Job::STATUS_PENDING !== $job->status() ) {
+			// Background backups are not "interrupted": they continue on
+			// their own and are shown on the Scheduled Backups screen.
+			if ( $job->isRunnable() && Job::STATUS_PENDING !== $job->status() && ! $job->param( 'background' ) ) {
 				return array( 'job' => $this->snapshot( $job ) );
 			}
 		}
@@ -358,6 +360,8 @@ class Controller {
 			);
 		}
 		$data['stage_list'] = $stages;
+		$data['background'] = (bool) $job->param( 'background' );
+		$data['busy']       = (bool) $job->runtime( 'busy', false );
 
 		if ( $details ) {
 			$data['report'] = array(
@@ -375,6 +379,8 @@ class Controller {
 				'verify_mode'   => (string) $job->shared( 'verify_mode', '' ),
 				'verified'      => (bool) $job->shared( 'verified', false ),
 				'verified_entries' => (int) $job->shared( 'verified_entries', 0 ),
+				'remote_upload' => $job->shared( 'remote_upload', null ),
+				'backup'        => $job->param( 'backup', null ),
 				'size_visible'  => Job::TYPE_EXPORT === $job->type() ? false !== $this->plugin->environment()->downloadDelivery()['ok'] : true,
 				'manifest'      => $job->shared( 'manifest', null ),
 				'urls'          => $job->shared( 'url_report', null ),

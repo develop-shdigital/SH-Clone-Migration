@@ -53,6 +53,8 @@ class Registry implements StageResolver {
 				'files'      => \SHCM\Export\Stages\FilesStage::class,
 				'finalize'   => \SHCM\Export\Stages\FinalizeStage::class,
 				'verify'     => \SHCM\Export\Stages\VerifyStage::class,
+				'upload'     => \SHCM\Export\Stages\RemoteUploadStage::class,
+				'retention'  => \SHCM\Export\Stages\BackupRetentionStage::class,
 			),
 			Job::TYPE_IMPORT  => array(
 				'initialize'    => \SHCM\Import\Stages\InitializeStage::class,
@@ -84,6 +86,22 @@ class Registry implements StageResolver {
 		$map    = $this->map();
 		$stages = isset( $map[ $type ] ) ? array_keys( $map[ $type ] ) : array();
 
+		if ( Job::TYPE_EXPORT === $type ) {
+			$backup = isset( $params['backup'] ) && is_array( $params['backup'] ) ? $params['backup'] : array();
+			$gdrive = ! empty( $backup['gdrive'] );
+			$prune  = isset( $backup['kind'] ) && 'backup' === $backup['kind'];
+			if ( ! empty( $params['upload_only'] ) ) {
+				// Send an existing archive to Google Drive: nothing to build.
+				$stages = $prune ? array( 'upload', 'retention' ) : array( 'upload' );
+			} else {
+				if ( ! $gdrive ) {
+					$stages = array_values( array_diff( $stages, array( 'upload' ) ) );
+				}
+				if ( ! $prune ) {
+					$stages = array_values( array_diff( $stages, array( 'retention' ) ) );
+				}
+			}
+		}
 		if ( Job::TYPE_IMPORT === $type && empty( $params['create_rollback_point'] ) ) {
 			$stages = array_values( array_diff( $stages, array( 'rollback' ) ) );
 		}
@@ -150,6 +168,10 @@ class Registry implements StageResolver {
 
 			case \SHCM\Export\Stages\DatabaseStage::class:
 				return new $class( $settings, $storage, $logger, $this->plugin->inspector(), $wpdb );
+
+			case \SHCM\Export\Stages\RemoteUploadStage::class:
+			case \SHCM\Export\Stages\BackupRetentionStage::class:
+				return new $class( $settings, $storage, $logger, $this->plugin->backups() );
 
 			case \SHCM\Import\Stages\DatabaseStage::class:
 			case \SHCM\Import\Stages\UrlStage::class:

@@ -82,6 +82,7 @@ class Menu {
 			'shcm'                => __( 'Export', 'sh-clone-migration' ),
 			'shcm-import'         => __( 'Import', 'sh-clone-migration' ),
 			'shcm-backups'        => __( 'Backups', 'sh-clone-migration' ),
+			'shcm-schedules'      => __( 'Scheduled Backups', 'sh-clone-migration' ),
 			'shcm-tools'          => __( 'Search &amp; Replace', 'sh-clone-migration' ),
 			'shcm-settings'       => __( 'Settings', 'sh-clone-migration' ),
 			'shcm-system-status'  => __( 'System Status', 'sh-clone-migration' ),
@@ -91,10 +92,15 @@ class Menu {
 			'shcm'               => 'renderExport',
 			'shcm-import'        => 'renderImport',
 			'shcm-backups'       => 'renderBackups',
+			'shcm-schedules'     => 'renderSchedules',
 			'shcm-tools'         => 'renderTools',
 			'shcm-settings'      => 'renderSettings',
 			'shcm-system-status' => 'renderSystemStatus',
 		);
+
+		if ( ! \SHCM\Core\Plugin::backupsAvailable() ) {
+			unset( $pages['shcm-schedules'] );
+		}
 
 		foreach ( $pages as $slug => $title ) {
 			$this->screens[] = add_submenu_page(
@@ -192,6 +198,15 @@ class Menu {
 			'retrying'        => __( 'Connection problem, retrying', 'sh-clone-migration' ),
 			'passwordNeeded'  => __( 'This archive is encrypted. Enter the migration password.', 'sh-clone-migration' ),
 			'genericError'    => __( 'Something went wrong. Check the migration log for details.', 'sh-clone-migration' ),
+			'saved'           => __( 'Saved.', 'sh-clone-migration' ),
+			'confirmDisconnect' => __( 'Disconnect Google Drive? Backups already on Google Drive stay there; new backups are kept on this server only.', 'sh-clone-migration' ),
+			'backupRunning'   => __( 'Backing up', 'sh-clone-migration' ),
+			'backupDone'      => __( 'Backup completed', 'sh-clone-migration' ),
+			'backupPartial'   => __( 'Backup kept on this server, but not uploaded to Google Drive', 'sh-clone-migration' ),
+			'backupFailed'    => __( 'Backup failed', 'sh-clone-migration' ),
+			'uploadDone'      => __( 'Uploaded to Google Drive', 'sh-clone-migration' ),
+			'copied'          => __( 'Copied', 'sh-clone-migration' ),
+			'passwordMismatch' => __( 'The two passwords do not match.', 'sh-clone-migration' ),
 		);
 	}
 
@@ -220,6 +235,15 @@ class Menu {
 	 */
 	public function renderBackups() {
 		$this->render( 'backups' );
+	}
+
+	/**
+	 * Render the scheduled backups screen.
+	 *
+	 * @return void
+	 */
+	public function renderSchedules() {
+		$this->render( 'schedules' );
 	}
 
 	/**

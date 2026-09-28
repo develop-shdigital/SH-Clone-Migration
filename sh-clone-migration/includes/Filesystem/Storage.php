@@ -105,6 +105,17 @@ class Storage {
 	}
 
 	/**
+	 * Configuration documents (backup schedule, Google Drive connection,
+	 * backup history). Kept here, not in the database, so that exports never
+	 * carry them and imports never replace them.
+	 *
+	 * @return string
+	 */
+	public function config() {
+		return $this->base . '/config';
+	}
+
+	/**
 	 * All managed sub directories.
 	 *
 	 * @return string[]
@@ -118,6 +129,7 @@ class Storage {
 			$this->logs(),
 			$this->incoming(),
 			$this->rollback(),
+			$this->config(),
 		);
 	}
 
