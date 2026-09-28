@@ -164,7 +164,7 @@ Menu::header(
 						<a class="button button-small" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=shcm_download_log&job_id=' . rawurlencode( $shcm_job->id() ) ), 'shcm_download_log' ) ); ?>">
 							<?php esc_html_e( 'Log', 'sh-clone-migration' ); ?>
 						</a>
-						<?php if ( $shcm_job->isRunnable() && $shcm_job->param( 'background' ) ) : ?>
+						<?php if ( $shcm_job->isRunnable() && $shcm_job->param( 'background' ) && $plugin::backupsAvailable() ) : ?>
 							<?php // Backups run by themselves; their screen shows the progress. ?>
 							<a class="button button-small" href="<?php echo esc_url( admin_url( 'admin.php?page=shcm-schedules' ) ); ?>">
 								<?php esc_html_e( 'Progress', 'sh-clone-migration' ); ?>

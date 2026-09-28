@@ -93,6 +93,7 @@ class Controller {
 	 * @throws \RuntimeException When the archive is unusable.
 	 */
 	public function startImport( array $input ) {
+		$this->ensureNoBackupRunning();
 		$catalog = new Catalog( $this->plugin->storage() );
 		$name    = isset( $input['archive'] ) ? (string) $input['archive'] : '';
 		$path    = $catalog->resolve( $name );
@@ -168,6 +169,7 @@ class Controller {
 	 * @throws \RuntimeException When there is no rollback point to restore.
 	 */
 	public function startRollback( $job_id ) {
+		$this->ensureNoBackupRunning();
 		$source = $this->plugin->jobs()->load( $job_id );
 		if ( null === $source ) {
 			throw new \RuntimeException( __( 'That migration job no longer exists.', 'sh-clone-migration' ) );
@@ -226,6 +228,9 @@ class Controller {
 	 * @return array
 	 */
 	public function startReplace( array $input ) {
+		if ( empty( $input['dry_run'] ) ) {
+			$this->ensureNoBackupRunning();
+		}
 		$params = array(
 			'search'  => isset( $input['search'] ) ? (string) $input['search'] : '',
 			'replace' => isset( $input['replace'] ) ? (string) $input['replace'] : '',
@@ -265,9 +270,38 @@ class Controller {
 		if ( $job->param( 'background' ) && \SHCM\Core\Plugin::backupsAvailable() ) {
 			return $this->snapshot( $this->lookIn( $job ) );
 		}
+		if ( Job::TYPE_IMPORT === $job->type() || ( Job::TYPE_REPLACE === $job->type() && ! $job->param( 'dry_run' ) ) ) {
+			// A backup started while this job sat abandoned: resuming now would
+			// change the site under it.
+			$this->ensureNoBackupRunning();
+		}
 		$job = $this->plugin->runner()->tick( $job );
 
 		return $this->snapshot( $job );
+	}
+
+	/**
+	 * Refuse to change the site while a backup is being made of it: the
+	 * archive would hold half of the old site and half of the new one, and
+	 * still count as a good backup.
+	 *
+	 * @return void
+	 * @throws \RuntimeException When a backup is running.
+	 */
+	protected function ensureNoBackupRunning() {
+		if ( ! Plugin::backupsAvailable() ) {
+			return;
+		}
+		$running = $this->plugin->backups()->runningJob();
+		if ( null !== $running ) {
+			throw new \RuntimeException(
+				sprintf(
+					/* translators: %s: job id */
+					__( 'A backup is running (job %s). Wait for it to finish, or cancel it on the Scheduled Backups screen, then try again.', 'sh-clone-migration' ),
+					$running
+				)
+			);
+		}
 	}
 
 	/**

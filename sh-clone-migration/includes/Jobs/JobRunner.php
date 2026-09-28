@@ -266,7 +266,12 @@ class JobRunner {
 		$job->set( 'tick_progress', (float) $job->get( 'progress' ) );
 		$job->set( 'status', Job::STATUS_RUNNING );
 		$job->set( 'ticks', (int) $job->get( 'ticks' ) + 1 );
-		$this->store->save( $job );
+		if ( ! $this->store->save( $job ) ) {
+			// Nothing this request did could be recorded (a full disk): doing
+			// the work anyway would only repeat it at every request.
+			$this->logger->error( sprintf( 'Job %s: its state cannot be saved (is the disk full?); it was not advanced.', $job->id() ) );
+			return $job;
+		}
 
 		$guard = 0;
 		while ( true ) {
@@ -610,12 +615,18 @@ class JobRunner {
 			)
 		);
 		$job->set( 'message', $error->getMessage() );
-		$this->store->save( $job );
+		$saved = $this->store->save( $job );
 		// A cancel requested after the check above came too late.
 		$this->clearCancelRequest( $job->id() );
 		$this->logger->error( sprintf( 'Job %s failed in stage %s: %s', $job->id(), $job->stage(), $error->getMessage() ) );
 		$this->logger->error( $error->getTraceAsString() );
 		$this->announce( 'shcm_job_failed', $job, $error );
+		if ( ! $saved && ! $this->store->save( $job ) ) {
+			// A full disk, typically; the listeners (which delete a partial
+			// archive) usually free enough to save on the second try. Without
+			// the saved status the job would be picked up and fail again.
+			$this->logger->error( sprintf( 'Job %s: the failed state could not be saved.', $job->id() ) );
+		}
 		return $job;
 	}
 

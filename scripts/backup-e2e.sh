@@ -252,6 +252,9 @@ for i in $(seq 1 60); do
 	ajax status "job_id=$JOBC" | jq -r '.data.message // ""' | grep -qi 'retry' && break
 	sleep 1
 done
+# confirmed=0: even without the guard the import would stop before touching the site.
+imp=$(ajax start_import archive=none.wpress confirmed=0 | jq -r '.data.message // ""')
+echo "$imp" | grep -q "A backup is running"; check "a restore cannot start while a backup runs" $? "($imp)"
 ajax cancel "job_id=$JOBC" >/dev/null
 wait_job "$JOBC" status 60 >/dev/null
 is "cancelled while waiting to retry the upload" "$(cat "$WORK/last-status")" "cancelled"
@@ -326,6 +329,13 @@ is "database rows containing Drive secrets" "$dbleak" "0"
 
 echo
 echo "--- 11. SHCM_DISABLE_BACKUPS switches the feature off -------------"
+wpc option update shcm_test_backoff "30,30,30,30,30,30" >/dev/null
+control '{"fail":[{"method":"PUT","path":"/upload/drive/v3/files","status":503,"times":50}]}'
+JOBD=$(ajax start_backup gdrive=1 contents=database | jq -r '.data.id')
+for i in $(seq 1 60); do
+	ajax status "job_id=$JOBD" | jq -r '.data.message // ""' | grep -qi 'retry' && break
+	sleep 1
+done
 wpc config set SHCM_DISABLE_BACKUPS true --raw --type=constant >/dev/null
 sleep 3 # PHP-FPM's opcache looks at wp-config.php again only every few seconds.
 menu=$(curl -s -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm" | grep -c "href=.admin.php?page=shcm-schedules.")
@@ -333,6 +343,10 @@ is "no Scheduled Backups menu entry" "$menu" "0"
 is "backup AJAX actions refuse" "$(ajax backup_status | jq -r '.success')" "false"
 (cd "$ROOT" && wp --allow-root shcm backup schedule >/dev/null 2>&1); is "no WP-CLI backup command" "$?" "1"
 is "its WP-Cron event is removed" "$(wpe 'do_action( "shcm_worker" ); var_dump( (bool) wp_next_scheduled( "shcm_scheduled_backup" ) );')" "bool(false)"
+is "a backup still running is cancelled, not finished" "$(wpe "echo shcm_bootstrap()->jobs()->load('$JOBD')->status();")" "cancelled"
+is "and recorded as cancelled" "$(history_field "$JOBD" .status)" "cancelled"
+control '{"clear_faults":true}'
+wpc option update shcm_test_backoff "1,1,1,1,1,1" >/dev/null
 wpc config delete SHCM_DISABLE_BACKUPS >/dev/null
 sleep 3
 curl -s -o /dev/null -b "$JAR" -H "$H" "$BASE/wp-admin/admin.php?page=shcm-schedules"

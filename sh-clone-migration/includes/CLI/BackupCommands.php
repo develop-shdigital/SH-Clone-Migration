@@ -148,6 +148,11 @@ class BackupCommands {
 				\WP_CLI::log( sprintf( 'Backup %s is running.', $running ) );
 				return;
 			}
+			$restore = $backups->restoreInProgress();
+			if ( null !== $restore ) {
+				\WP_CLI::warning( sprintf( 'Backup %1$s waits: %2$s', $running, $restore ) );
+				return;
+			}
 			\WP_CLI::log( sprintf( 'Continuing backup %s.', $running ) );
 			$this->finish( $running, false );
 			return;

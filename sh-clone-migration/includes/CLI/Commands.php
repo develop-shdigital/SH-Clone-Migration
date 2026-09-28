@@ -503,6 +503,13 @@ class Commands {
 		if ( empty( $args[0] ) ) {
 			\WP_CLI::error( 'Specify the job to resume.' );
 		}
+		$stored = $this->plugin->jobs()->load( $args[0] );
+		if ( null !== $stored && in_array( $stored->type(), array( \SHCM\Jobs\Job::TYPE_IMPORT, \SHCM\Jobs\Job::TYPE_REPLACE ), true ) && \SHCM\Core\Plugin::backupsAvailable() ) {
+			$running = $this->plugin->backups()->runningJob();
+			if ( null !== $running ) {
+				\WP_CLI::error( sprintf( 'A backup is running (job %s). Wait for it to finish, or cancel it with `wp shcm cancel %s`, then resume.', $running, $running ) );
+			}
+		}
 		$job = $this->drive( $args[0], isset( $assoc_args['password'] ) ? $assoc_args['password'] : '', true );
 
 		if ( 'completed' !== $job['status'] ) {

@@ -155,6 +155,18 @@ class Storage {
 		if ( false !== $parent ) {
 			@chmod( $dir, ( $parent & 0777 ) | 0755 );
 		}
+		// WP-CLI run as root (a deploy script, the root crontab) would
+		// otherwise leave a directory PHP cannot write to.
+		if ( function_exists( 'posix_geteuid' ) && 0 === posix_geteuid() ) {
+			$owner = @fileowner( dirname( $dir ) );
+			$group = @filegroup( dirname( $dir ) );
+			if ( false !== $owner && 0 !== $owner ) {
+				@chown( $dir, $owner );
+			}
+			if ( false !== $group && 0 !== $group ) {
+				@chgrp( $dir, $group );
+			}
+		}
 		return true;
 	}
 
@@ -166,11 +178,14 @@ class Storage {
 	public function prepare() {
 		$ok = true;
 		foreach ( $this->directories() as $dir ) {
+			// The backup settings directory is not needed for migrations: its
+			// problems are reported on the backup screens instead.
+			$needed = $dir !== $this->config();
 			if ( ! is_dir( $dir ) && ! self::makeDirectory( $dir ) ) {
-				$ok = false;
+				$ok = $ok && ! $needed;
 				continue;
 			}
-			if ( ! is_writable( $dir ) ) {
+			if ( $needed && ! is_writable( $dir ) ) {
 				$ok = false;
 			}
 		}

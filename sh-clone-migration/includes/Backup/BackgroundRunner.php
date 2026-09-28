@@ -96,6 +96,15 @@ class BackgroundRunner {
 		if ( ! $job->isRunnable() || ! $job->param( 'background' ) ) {
 			return $job;
 		}
+		if ( null !== $this->backups->restoreInProgress() ) {
+			// The site is being changed under the backup: look again in a
+			// minute instead of archiving half of each.
+			$args = array( $job->id() );
+			if ( false === wp_next_scheduled( self::RESUME_HOOK, $args ) ) {
+				wp_schedule_single_event( time() + 60, self::RESUME_HOOK, $args );
+			}
+			return $job;
+		}
 		$budget = null;
 		if ( null !== $seconds ) {
 			$budget = \SHCM\Jobs\Budget::create( max( 1, (int) $seconds ), $this->plugin->settings()->getInt( 'memory_guard', 80 ) );

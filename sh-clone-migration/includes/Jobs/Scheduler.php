@@ -207,9 +207,19 @@ class Scheduler {
 			return false;
 		}
 
-		// Last, as it touches the filesystem: a long slice that has not saved
-		// for a while is still being worked on.
-		return ! JobLock::isLocked( $jobs_dir, $job->id() );
+		// A long slice that has not saved for a while is still being worked on.
+		if ( JobLock::isLocked( $jobs_dir, $job->id() ) ) {
+			return false;
+		}
+
+		/**
+		 * Whether the WP-Cron worker may advance a job it found idle (a backup
+		 * waits while a restore runs, for example).
+		 *
+		 * @param bool $may Whether it may.
+		 * @param Job  $job The job.
+		 */
+		return function_exists( 'apply_filters' ) ? (bool) apply_filters( 'shcm_worker_may_tick', true, $job ) : true;
 	}
 
 	/**

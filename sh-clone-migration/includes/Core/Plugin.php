@@ -94,8 +94,12 @@ class Plugin {
 		if ( self::backupsAvailable() ) {
 			$this->backups()->register();
 		} else {
-			// Switched off: drop backup events left from when it was on.
+			// Switched off: drop backup events left from when it was on, and
+			// cancel (and record) a backup still running, before the worker
+			// (priority 10) would carry it on.
 			add_action( 'shcm_worker', array( \SHCM\Backup\BackupManager::class, 'unscheduleAll' ) );
+			$this->backups()->registerBookkeeping();
+			add_action( 'shcm_worker', array( $this->backups(), 'cancelRunning' ), 5 );
 		}
 
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {

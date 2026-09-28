@@ -94,6 +94,20 @@ class BackupManager {
 		add_action( 'shcm_worker', array( $this, 'reconcile' ), 5 );
 		add_action( 'shcm_cleanup', array( $this, 'reconcile' ), 5 );
 		add_action( 'admin_init', array( $this, 'reconcile' ) );
+		$this->registerBookkeeping();
+		add_filter( 'shcm_job_password', array( $this, 'jobPassword' ), 10, 2 );
+		add_filter( 'shcm_worker_may_tick', array( $this, 'workerMayTick' ), 10, 2 );
+		$this->runner()->register();
+	}
+
+	/**
+	 * Listen to job outcomes, to keep the history and send the e-mails. Also
+	 * registered while backups are switched off, so that a backup cancelled
+	 * then is recorded.
+	 *
+	 * @return void
+	 */
+	public function registerBookkeeping() {
 		// The job itself is finished and saved by now; a failure to record it
 		// (history file unwritable, mail error) must not escape into the
 		// request that finished it.
@@ -117,8 +131,22 @@ class BackupManager {
 				$this->safely( 'onJobCancelled', $job );
 			}
 		);
-		add_filter( 'shcm_job_password', array( $this, 'jobPassword' ), 10, 2 );
-		$this->runner()->register();
+	}
+
+	/**
+	 * Cancel the backups still running (backups were switched off with
+	 * SHCM_DISABLE_BACKUPS): the worker would otherwise finish them, uploads
+	 * and retention included.
+	 *
+	 * @return void
+	 */
+	public function cancelRunning() {
+		foreach ( $this->plugin->jobs()->all( Job::TYPE_EXPORT, 50 ) as $job ) {
+			if ( $job->isRunnable() && $this->isBackupJob( $job ) ) {
+				$this->plugin->logger()->channel( $job->id() )->warning( 'Backups are switched off (SHCM_DISABLE_BACKUPS): the running backup is cancelled.' );
+				$this->plugin->runner()->cancelJob( $job );
+			}
+		}
 	}
 
 	/**
@@ -879,6 +907,43 @@ class BackupManager {
 	}
 
 	/**
+	 * A restore or search & replace changing the site right now (not an
+	 * abandoned one): a running backup waits for it rather than archive half
+	 * of the old site and half of the new one.
+	 *
+	 * @return string|null Why, or null.
+	 */
+	public function restoreInProgress() {
+		if ( class_exists( MaintenanceMode::class ) && MaintenanceMode::isEnabled() ) {
+			return __( 'The site is in maintenance mode (a restore is running).', 'sh-clone-migration' );
+		}
+		foreach ( $this->plugin->jobs()->all( null, 50 ) as $job ) {
+			if ( ! $job->isRunnable() || ! in_array( $job->type(), array( Job::TYPE_IMPORT, Job::TYPE_REPLACE ), true ) ) {
+				continue;
+			}
+			$idle = time() - (int) $job->get( 'updated_at' );
+			if ( $idle <= self::STALE_JOB_SECONDS || \SHCM\Jobs\JobLock::isLocked( $this->plugin->runner()->jobsDirectory(), $job->id() ) ) {
+				return __( 'A restore or search & replace is in progress.', 'sh-clone-migration' );
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Filter callback: the worker leaves a backup alone while a restore runs.
+	 *
+	 * @param bool $may Whether the worker may tick the job.
+	 * @param Job  $job Job.
+	 * @return bool
+	 */
+	public function workerMayTick( $may, $job ) {
+		if ( $may && $job instanceof Job && $this->isBackupJob( $job ) && null !== $this->restoreInProgress() ) {
+			return false;
+		}
+		return $may;
+	}
+
+	/**
 	 * Start a backup job (not yet ticked).
 	 *
 	 * @param string $trigger   schedule, manual or cli.
@@ -1191,6 +1256,18 @@ class BackupManager {
 			return;
 		}
 
+		// Reported already (a job whose failed state could not be saved is
+		// failed again when it is picked up): keep the first cause, and do not
+		// e-mail twice.
+		$existing = $this->history()->get( $id );
+		$noted    = function_exists( 'get_transient' ) && get_transient( 'shcm_backup_failed_' . md5( $id ) );
+		if ( $noted || ( is_array( $existing ) && isset( $existing['status'] ) && 'failed' === $existing['status'] ) ) {
+			return;
+		}
+		if ( function_exists( 'set_transient' ) ) {
+			// The database, unlike a full disk, can usually still take this.
+			set_transient( 'shcm_backup_failed_' . md5( $id ), time(), DAY_IN_SECONDS );
+		}
 		$path = (string) $job->param( 'archive_path' );
 		// A failed export leaves a partial archive behind: remove it, it is
 		// not a backup and it only uses space. A finished archive (the job
