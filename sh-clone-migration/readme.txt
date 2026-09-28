@@ -290,7 +290,13 @@ This is Google Drive, provided by Google LLC:
 * New: WP-CLI commands `wp shcm backup now|run|schedule|history|upload` and `wp shcm gdrive status|test|list|disconnect`.
 * New: System Status shows the backup schedule, whether WP-Cron is running and the Google Drive connection.
 * The schedule, the Drive connection and the history live outside the database, so migrating or restoring a site neither carries them to another site nor replaces them; a copy of wp-content on another server pauses itself instead of pruning the original's backups.
-* Jobs are now locked while a request works on them, so a browser tab, WP-Cron and the background runner can never advance the same job at once, and cancelling a running job always takes effect.
+* Jobs are now locked while a request works on them, so a browser tab, WP-Cron and the background runner can never advance the same job at once, and cancelling a running job always takes effect ("Cancelling…" is shown until it has).
+* A job whose requests keep dying on the same step (a PHP fatal error, the memory limit, a server timeout) now fails after three attempts with that explanation, instead of being retried forever. This applies to migrations too.
+* A restore, rollback or search & replace refuses to start while a backup is being made, and a running backup waits while a restore is in progress, so no backup ever holds half of the old site and half of the new one.
+* Backups are never lost silently: a full disk, a paused schedule, an unreadable settings file or a skipped run is recorded, shown on the screen and in System Status, and e-mailed. Backup failure e-mails now say why.
+* Retention never deletes the only copy of a backup, a backup newer than the ones it keeps, or a file you put back by hand; manual exports are never touched by it.
+* `SHCM_DISABLE_BACKUPS` in wp-config.php switches scheduled backups off entirely (for hosts that forbid background work or outgoing connections).
+* "Background worker" in the settings now applies to browser migrations only; backups always continue in the background.
 
 = 1.0.1 =
 * Downloads keep their exact size (Content-Length) on Apache with PHP-FPM and on servers that compress every response, so download managers no longer report "file size unknown" and can resume. Correct suffix, open and clamped ranges, 416 responses, ETag/If-Range (Chrome and Edge can resume), HEAD, and no download of an archive that is still being written.
