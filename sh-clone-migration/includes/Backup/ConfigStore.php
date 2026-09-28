@@ -109,6 +109,30 @@ final class ConfigStore {
 	}
 
 	/**
+	 * Whether a document exists and is readable but does not decode (cut
+	 * short by a partial copy of wp-content, edited by hand). It then reads
+	 * as empty, which must not be mistaken for "nothing configured" either.
+	 *
+	 * @param string $name Document name.
+	 * @return bool
+	 */
+	public function damaged( $name ) {
+		$path = $this->path( $name );
+		clearstatcache( true, $path );
+		if ( ! is_file( $path ) || ! is_readable( $path ) ) {
+			return false;
+		}
+		$raw = @file_get_contents( $path );
+		if ( ! is_string( $raw ) ) {
+			return false;
+		}
+		if ( 0 === strpos( $raw, self::GUARD ) ) {
+			$raw = substr( $raw, strlen( self::GUARD ) );
+		}
+		return ! is_array( Json::decode( $raw ) );
+	}
+
+	/**
 	 * Problems that stop this process from using the stored configuration,
 	 * as sentences for the admin (empty when there are none).
 	 *
@@ -124,6 +148,12 @@ final class ConfigStore {
 					__( '%1$s cannot be read by the web server (it belongs to %2$s). Run WP-CLI as the web server user, or make the file readable for it.', 'sh-clone-migration' ),
 					$this->path( $name ),
 					self::owner( $this->path( $name ) )
+				);
+			} elseif ( $this->damaged( $name ) ) {
+				$problems[] = sprintf(
+					/* translators: %s: file path */
+					__( '%s is damaged and cannot be read. Save the settings on the Scheduled Backups screen again to replace it.', 'sh-clone-migration' ),
+					$this->path( $name )
 				);
 			}
 		}
@@ -291,7 +321,7 @@ final class ConfigStore {
 	 * @return bool
 	 */
 	private function ensureDirectory() {
-		if ( ! is_dir( $this->directory ) && ! @mkdir( $this->directory, 0755, true ) && ! is_dir( $this->directory ) ) {
+		if ( ! is_dir( $this->directory ) && ! \SHCM\Filesystem\Storage::makeDirectory( $this->directory ) ) {
 			return false;
 		}
 		if ( ! is_file( $this->directory . '/index.php' ) ) {

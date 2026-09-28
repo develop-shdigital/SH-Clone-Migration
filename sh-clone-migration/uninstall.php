@@ -46,6 +46,25 @@ foreach ( $shcm_htaccess_files as $shcm_htaccess ) {
 delete_transient( 'shcm_delivery_probe' );
 delete_transient( 'shcm_htaccess_attempt' );
 
+$shcm_storage = WP_CONTENT_DIR . '/shcm-storage';
+
+// Give the Google Drive access back on every uninstall, not only a full one:
+// the grant is of no use without the plugin and its refresh token must not
+// outlive it (best effort; backups on Drive are left in place). The schedule
+// and the history stay unless everything is deleted below.
+if ( is_file( $shcm_storage . '/config/gdrive.php' ) && is_file( __DIR__ . '/includes/bootstrap.php' ) ) {
+	try {
+		require_once __DIR__ . '/includes/bootstrap.php';
+		if ( class_exists( '\SHCM\Remote\GoogleDrive\OAuth' ) ) {
+			$shcm_connection = new \SHCM\Remote\GoogleDrive\Connection( new \SHCM\Backup\ConfigStore( $shcm_storage . '/config' ), \SHCM\Security\SecretBox::fromWordPress() );
+			( new \SHCM\Remote\GoogleDrive\OAuth( $shcm_connection, new \SHCM\Remote\Http\WordPressTransport(), \SHCM\Remote\GoogleDrive\Endpoints::resolve() ) )->revoke();
+		}
+	} catch ( \Throwable $shcm_error ) {
+		unset( $shcm_error );
+	}
+	@unlink( $shcm_storage . '/config/gdrive.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+}
+
 if ( ! $shcm_full ) {
 	return;
 }
@@ -91,22 +110,6 @@ function shcm_uninstall_rmdir( $directory ) {
 		}
 	}
 	@rmdir( $directory );
-}
-
-$shcm_storage = WP_CONTENT_DIR . '/shcm-storage';
-
-// Give the Google Drive access back before its token is deleted with the
-// storage directory (best effort; backups on Drive are left in place).
-if ( is_file( $shcm_storage . '/config/gdrive.php' ) && is_file( __DIR__ . '/includes/bootstrap.php' ) ) {
-	try {
-		require_once __DIR__ . '/includes/bootstrap.php';
-		if ( class_exists( '\SHCM\Remote\GoogleDrive\OAuth' ) ) {
-			$shcm_connection = new \SHCM\Remote\GoogleDrive\Connection( new \SHCM\Backup\ConfigStore( $shcm_storage . '/config' ), \SHCM\Security\SecretBox::fromWordPress() );
-			( new \SHCM\Remote\GoogleDrive\OAuth( $shcm_connection, new \SHCM\Remote\Http\WordPressTransport(), \SHCM\Remote\GoogleDrive\Endpoints::resolve() ) )->revoke();
-		}
-	} catch ( \Throwable $shcm_error ) {
-		unset( $shcm_error );
-	}
 }
 
 if ( is_dir( $shcm_storage ) ) {

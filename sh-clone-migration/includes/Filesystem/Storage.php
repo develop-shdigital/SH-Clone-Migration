@@ -134,6 +134,31 @@ class Storage {
 	}
 
 	/**
+	 * Create a directory with the permissions of its parent.
+	 *
+	 * WP-CLI and PHP often run as different system accounts (root or a
+	 * deploy user, and www-data). A subdirectory created by one of them with
+	 * a fixed 0755 would lock the other out; taking the parent's mode keeps
+	 * whatever the site owner set up for the storage directory.
+	 *
+	 * @param string $dir Directory.
+	 * @return bool Whether it exists now.
+	 */
+	public static function makeDirectory( $dir ) {
+		if ( is_dir( $dir ) ) {
+			return true;
+		}
+		if ( ! @mkdir( $dir, 0755, true ) && ! is_dir( $dir ) ) {
+			return false;
+		}
+		$parent = @fileperms( dirname( $dir ) );
+		if ( false !== $parent ) {
+			@chmod( $dir, ( $parent & 0777 ) | 0755 );
+		}
+		return true;
+	}
+
+	/**
 	 * Create the directory tree and its access protection files.
 	 *
 	 * @return bool True when every directory exists and is writable.
@@ -141,7 +166,7 @@ class Storage {
 	public function prepare() {
 		$ok = true;
 		foreach ( $this->directories() as $dir ) {
-			if ( ! is_dir( $dir ) && ! @mkdir( $dir, 0755, true ) && ! is_dir( $dir ) ) {
+			if ( ! is_dir( $dir ) && ! self::makeDirectory( $dir ) ) {
 				$ok = false;
 				continue;
 			}

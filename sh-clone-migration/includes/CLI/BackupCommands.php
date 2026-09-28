@@ -150,6 +150,18 @@ class BackupCommands {
 
 		$job = $backups->startScheduled();
 		if ( null === $job ) {
+			$outcome = $backups->lastOutcome();
+			switch ( $outcome['result'] ) {
+				case 'postponed':
+					\WP_CLI::warning( 'Scheduled backup postponed by 15 minutes: ' . $outcome['message'] );
+					return;
+				case 'skipped':
+				case 'paused':
+				case 'failed':
+					// Cron mails the output of a failing job: this needs a look.
+					\WP_CLI::error( 'Scheduled backup ' . $outcome['result'] . ': ' . $outcome['message'] );
+					return;
+			}
 			if ( ! isset( $assoc_args['quiet'] ) ) {
 				$summary = $backups->summary();
 				\WP_CLI::line( 'Nothing is due. ' . $summary['describe'] . ( $summary['next_run'] ? ', next run ' . wp_date( 'Y-m-d H:i', (int) $summary['next_run'] ) : '' ) . '.' );

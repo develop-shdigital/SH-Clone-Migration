@@ -38,6 +38,30 @@ class BackupManager {
 	const MAX_DEFERRALS  = 8;
 
 	/**
+	 * Transient holding the earliest time to try a due run again after the
+	 * bookkeeping for it failed (a full disk): without it the overdue run
+	 * would be re-armed, and fail, every minute.
+	 */
+	const RETRY_TRANSIENT = 'shcm_backup_retry_at';
+
+	/**
+	 * Seconds an import or search & replace may sit untouched and unlocked
+	 * before it no longer holds backups back (the rule maintenance mode uses
+	 * for an abandoned restore).
+	 */
+	const STALE_JOB_SECONDS = 900;
+
+	/**
+	 * What the last startScheduled() call did, for WP-CLI.
+	 *
+	 * @var array{result: string, message: string}
+	 */
+	protected $outcome = array(
+		'result'  => 'not_due',
+		'message' => '',
+	);
+
+	/**
 	 * Container.
 	 *
 	 * @var Plugin
@@ -305,6 +329,7 @@ class BackupManager {
 	 * @throws \InvalidArgumentException On invalid input.
 	 */
 	public function saveSchedule( array $input, $password = null ) {
+		$this->requireMainSite();
 		$config = Schedule::sanitize( $input, $this->config() );
 		$state  = $this->state();
 
@@ -321,6 +346,7 @@ class BackupManager {
 
 		$state['fingerprint'] = SiteIdentity::fingerprint();
 		$state['next_run']    = Schedule::nextRun( $config, $this->timezone(), time() );
+		$state['tz']          = $this->timezone()->getName();
 		$state['deferrals']   = 0;
 		$state['updated_at']  = time();
 
@@ -348,6 +374,7 @@ class BackupManager {
 	 * @return void
 	 */
 	public function adoptThisSite() {
+		$this->requireMainSite();
 		$this->updateState(
 			function ( array $state ) {
 				$state['fingerprint'] = SiteIdentity::fingerprint();
@@ -357,6 +384,19 @@ class BackupManager {
 		);
 		$this->connection()->adoptThisSite();
 		$this->reconcile();
+	}
+
+	/**
+	 * Backups cover the whole network and run on the main site only; its
+	 * settings are changed there too.
+	 *
+	 * @return void
+	 * @throws \InvalidArgumentException On a subsite of a network.
+	 */
+	protected function requireMainSite() {
+		if ( ! $this->isMainSite() ) {
+			throw new \InvalidArgumentException( __( 'Backups cover the whole network and are managed on the main site only. Open this screen on the main site.', 'sh-clone-migration' ) );
+		}
 	}
 
 	/**
@@ -384,35 +424,81 @@ class BackupManager {
 			if ( false !== wp_next_scheduled( self::HOOK ) ) {
 				wp_unschedule_hook( self::HOOK );
 			}
+			if ( 'manual' !== $config['frequency'] && $this->isMainSite() && ! $this->identityMatches() ) {
+				$this->reportPausedRun( $config );
+			}
 			return;
 		}
 
 		$state = $this->state();
 		$next  = null === $state['next_run'] ? null : (int) $state['next_run'];
-		if ( null === $next ) {
+		$tz    = $this->timezone()->getName();
+		$moved = isset( $state['tz'] ) && '' !== (string) $state['tz'] && $tz !== (string) $state['tz'];
+		if ( null === $next || ( $moved && 0 === (int) $state['deferrals'] && $next > time() ) ) {
+			// Never computed, or computed in a timezone the site no longer
+			// uses (the owner set the site's timezone after the schedule).
 			$next = Schedule::nextRun( $config, $this->timezone(), time() );
 			$this->updateState(
-				function ( array $s ) use ( $next ) {
+				function ( array $s ) use ( $next, $tz ) {
 					$s['next_run'] = $next;
+					$s['tz']       = $tz;
 					return $s;
 				}
 			);
 		}
 
 		// An overdue run (WP-Cron did not fire, or the site was offline) runs
-		// once, as soon as possible, not once per missed period.
+		// once, as soon as possible, not once per missed period. After a run
+		// whose bookkeeping failed, not before the retry time.
 		$now       = time();
+		$retry     = function_exists( 'get_transient' ) ? (int) get_transient( self::RETRY_TRANSIENT ) : 0;
+		$when      = $next <= $now ? max( $now + 5, $retry ) : $next;
 		$scheduled = wp_next_scheduled( self::HOOK );
 		if ( false !== $scheduled ) {
-			if ( (int) $scheduled === $next ) {
+			if ( (int) $scheduled === $next || (int) $scheduled === $when ) {
 				return;
 			}
-			if ( $next <= $now && (int) $scheduled <= $now + 60 ) {
+			if ( $next <= $now && (int) $scheduled <= $when + 60 && (int) $scheduled >= $retry ) {
 				return;
 			}
 		}
 		wp_unschedule_hook( self::HOOK );
-		wp_schedule_single_event( $next <= $now ? $now + 5 : $next, self::HOOK );
+		wp_schedule_single_event( $when, self::HOOK );
+	}
+
+	/**
+	 * The schedule is paused because this installation is not the one that
+	 * set it up. When a run falls due meanwhile, say so once per missed run
+	 * (history and e-mail): a legitimate change (the site's address, its
+	 * directory) would otherwise stop the backups without anyone noticing.
+	 *
+	 * @param array $config Configuration.
+	 * @return void
+	 */
+	protected function reportPausedRun( array $config ) {
+		$state = $this->state();
+		if ( null === $state['next_run'] || (int) $state['next_run'] > time() ) {
+			return;
+		}
+		$message = __( 'Scheduled backups are paused: this installation is not the one that set them up (the site was moved, copied or its address changed). Confirm on the Scheduled Backups screen that this is the same site.', 'sh-clone-migration' );
+		$this->plugin->logger()->channel( 'plugin' )->warning( 'Scheduled backup skipped: ' . $message );
+		try {
+			$this->advanceSchedule( $config );
+		} catch ( \Throwable $e ) {
+			return; // Cannot record that it was handled: better no e-mail than one per minute.
+		}
+		$entry = $this->recordSafely(
+			'skipped-' . gmdate( 'Ymd-His' ) . '-' . bin2hex( random_bytes( 2 ) ),
+			array(
+				'kind'     => 'skipped',
+				'trigger'  => 'schedule',
+				'status'   => 'skipped',
+				'started'  => time(),
+				'finished' => time(),
+				'error'    => $message,
+			)
+		);
+		$this->notify( $entry, $config );
 	}
 
 	/**
@@ -421,11 +507,63 @@ class BackupManager {
 	 * @return void
 	 */
 	public function handleScheduledEvent() {
-		$job = $this->startScheduled( true );
-		if ( null !== $job ) {
-			// First slice in this cron request; the rest continues through
-			// loopback requests (or the minute worker if loopbacks are blocked).
-			$this->runner()->drive( $job );
+		try {
+			$job = $this->startScheduled( true );
+			if ( null !== $job ) {
+				// First slice in this cron request; the rest continues through
+				// loopback requests (or the minute worker if loopbacks are blocked).
+				$this->runner()->drive( $job );
+			}
+		} catch ( \Throwable $e ) {
+			// Never take wp-cron.php down with us: the other events of this
+			// request still have to run.
+			$this->plugin->logger()->channel( 'plugin' )->error( 'Scheduled backup: ' . $e->getMessage() );
+			$this->retryLater();
+		}
+	}
+
+	/**
+	 * What the last startScheduled() call did.
+	 *
+	 * @return array{result: string, message: string} result: started, not_due,
+	 *               postponed, skipped, paused or failed.
+	 */
+	public function lastOutcome() {
+		return $this->outcome;
+	}
+
+	/**
+	 * Do not try the due run again before DEFER_SECONDS (its bookkeeping
+	 * failed, so next_run could not move forward).
+	 *
+	 * @return void
+	 */
+	protected function retryLater() {
+		if ( function_exists( 'set_transient' ) ) {
+			set_transient( self::RETRY_TRANSIENT, time() + self::DEFER_SECONDS, 2 * self::DEFER_SECONDS );
+		}
+		if ( function_exists( 'wp_schedule_single_event' ) ) {
+			wp_unschedule_hook( self::HOOK );
+			wp_schedule_single_event( time() + self::DEFER_SECONDS, self::HOOK );
+		}
+	}
+
+	/**
+	 * Write a history entry if possible; the entry is returned either way, so
+	 * the notification e-mail does not depend on a disk that may be full.
+	 *
+	 * @param string $id     Entry id.
+	 * @param array  $fields Fields.
+	 * @return array
+	 */
+	protected function recordSafely( $id, array $fields ) {
+		try {
+			return $this->history()->record( $id, $fields );
+		} catch ( \Throwable $e ) {
+			$this->plugin->logger()->channel( 'plugin' )->error( 'The backup history could not be updated: ' . $e->getMessage() );
+			$entry       = array_merge( array( 'created' => time() ), $fields );
+			$entry['id'] = (string) $id;
+			return $entry;
 		}
 	}
 
@@ -441,9 +579,18 @@ class BackupManager {
 	 * @return Job|null The job started, or null.
 	 */
 	public function startScheduled( $from_event = false ) {
-		$logger = $this->plugin->logger()->channel( 'plugin' );
+		$logger        = $this->plugin->logger()->channel( 'plugin' );
+		$this->outcome = array(
+			'result'  => 'not_due',
+			'message' => '',
+		);
 		if ( ! $this->configReadable() ) {
-			$logger->error( 'Scheduled backup not started: ' . implode( ' ', $this->storageProblems() ) );
+			$problems = implode( ' ', $this->storageProblems() );
+			$logger->error( 'Scheduled backup not started: ' . $problems );
+			$this->outcome = array(
+				'result'  => 'paused',
+				'message' => $problems,
+			);
 			if ( $from_event && function_exists( 'wp_schedule_single_event' ) && false === wp_next_scheduled( self::HOOK ) ) {
 				// Try again later instead of losing the run.
 				wp_schedule_single_event( time() + self::DEFER_SECONDS, self::HOOK );
@@ -453,19 +600,23 @@ class BackupManager {
 		$config = $this->config();
 		$state  = $this->state();
 
-		if ( 'manual' === $config['frequency'] || ! $this->identityMatches() || ! $this->isMainSite() ) {
+		if ( 'manual' === $config['frequency'] || ! $this->isMainSite() ) {
 			// An event left behind by an import or by an older schedule.
 			$this->reconcile();
 			return null;
 		}
-		$next = null === $state['next_run'] ? null : (int) $state['next_run'];
-		if ( null !== $next && time() < $next - ( $from_event ? 60 : 0 ) ) {
-			// Not due yet (for the event: an event that came with an imported
-			// cron option, or a clock that is slightly ahead).
+		if ( ! $this->identityMatches() ) {
+			$this->outcome = array(
+				'result'  => 'paused',
+				'message' => __( 'Scheduled backups are paused: this installation is not the one that set them up. Confirm on the Scheduled Backups screen that this is the same site.', 'sh-clone-migration' ),
+			);
 			$this->reconcile();
 			return null;
 		}
-		if ( null === $next ) {
+		$next = null === $state['next_run'] ? null : (int) $state['next_run'];
+		if ( null === $next || time() < $next - ( $from_event ? 60 : 0 ) ) {
+			// Not due yet (for the event: an event that came with an imported
+			// cron option, or a clock that is slightly ahead).
 			$this->reconcile();
 			return null;
 		}
@@ -475,16 +626,30 @@ class BackupManager {
 			$deferrals = (int) $state['deferrals'] + 1;
 			if ( $conflict['defer'] && $deferrals <= self::MAX_DEFERRALS ) {
 				$logger->warning( sprintf( 'Scheduled backup postponed by %d minutes: %s', self::DEFER_SECONDS / 60, $conflict['message'] ) );
-				$this->updateState(
-					function ( array $s ) use ( $deferrals ) {
-						$s['deferrals'] = $deferrals;
-						$s['next_run']  = time() + self::DEFER_SECONDS;
-						return $s;
-					}
+				$this->outcome = array(
+					'result'  => 'postponed',
+					'message' => $conflict['message'],
 				);
+				try {
+					$this->updateState(
+						function ( array $s ) use ( $deferrals ) {
+							$s['deferrals'] = $deferrals;
+							$s['next_run']  = time() + self::DEFER_SECONDS;
+							return $s;
+						}
+					);
+				} catch ( \Throwable $e ) {
+					$logger->error( 'The backup schedule could not be updated: ' . $e->getMessage() );
+					$this->retryLater();
+					return null;
+				}
 			} else {
 				$logger->warning( 'Scheduled backup skipped: ' . $conflict['message'] );
-				$entry = $this->history()->record(
+				$this->outcome = array(
+					'result'  => 'skipped',
+					'message' => $conflict['message'],
+				);
+				$entry = $this->recordSafely(
 					'skipped-' . gmdate( 'Ymd-His' ) . '-' . bin2hex( random_bytes( 2 ) ),
 					array(
 						'kind'     => 'skipped',
@@ -499,17 +664,59 @@ class BackupManager {
 				// postponements, or because the previous backup is still
 				// running when the next one is due (slow, or stuck).
 				$this->notify( $entry, $config );
-				$this->advanceSchedule( $config );
+				try {
+					$this->advanceSchedule( $config );
+				} catch ( \Throwable $e ) {
+					$logger->error( 'The backup schedule could not be updated: ' . $e->getMessage() );
+					$this->retryLater();
+					return null;
+				}
 			}
+			$this->reconcile();
+			return null;
+		}
+
+		// Claim the run under the schedule's lock: WP-Cron and a system cron
+		// job running `wp shcm backup run` may get here at the same moment,
+		// and only the one that moves next_run on may start the backup.
+		try {
+			$claimed = $this->claimRun( $next, $config );
+		} catch ( \Throwable $e ) {
+			$message = __( 'The scheduled backup could not start: its settings could not be saved (is the disk full?).', 'sh-clone-migration' ) . ' ' . $e->getMessage();
+			$logger->error( $message );
+			$this->outcome = array(
+				'result'  => 'failed',
+				'message' => $message,
+			);
+			$entry = $this->recordSafely(
+				'failed-' . gmdate( 'Ymd-His' ) . '-' . bin2hex( random_bytes( 2 ) ),
+				array(
+					'kind'     => 'failed',
+					'trigger'  => 'schedule',
+					'status'   => 'failed',
+					'started'  => time(),
+					'finished' => time(),
+					'error'    => $message,
+				)
+			);
+			$this->notify( $entry, $config );
+			$this->retryLater();
+			return null;
+		}
+		if ( ! $claimed ) {
 			$this->reconcile();
 			return null;
 		}
 
 		try {
 			$job = $this->startBackup( 'schedule' );
-		} catch ( \Exception $e ) {
+		} catch ( \Throwable $e ) {
 			$logger->error( 'Scheduled backup could not start: ' . $e->getMessage() );
-			$entry = $this->history()->record(
+			$this->outcome = array(
+				'result'  => 'failed',
+				'message' => $e->getMessage(),
+			);
+			$entry = $this->recordSafely(
 				'failed-' . gmdate( 'Ymd-His' ) . '-' . bin2hex( random_bytes( 2 ) ),
 				array(
 					'kind'     => 'failed',
@@ -521,14 +728,56 @@ class BackupManager {
 				)
 			);
 			$this->notify( $entry, $config );
-			$this->advanceSchedule( $config );
 			$this->reconcile();
 			return null;
 		}
 
-		$this->advanceSchedule( $config, $job->id() );
+		$this->outcome = array(
+			'result'  => 'started',
+			'message' => $job->id(),
+		);
+		try {
+			$this->updateState(
+				function ( array $s ) use ( $job ) {
+					$s['last_job'] = $job->id();
+					return $s;
+				}
+			);
+		} catch ( \Throwable $e ) {
+			$logger->error( 'The backup schedule could not be updated: ' . $e->getMessage() );
+		}
 		$this->reconcile();
 		return $job;
+	}
+
+	/**
+	 * Move a due run on to the next slot, if nobody else did meanwhile.
+	 *
+	 * @param int   $due    next_run as read when the run was found due.
+	 * @param array $config Configuration.
+	 * @return bool Whether this request claimed the run.
+	 */
+	protected function claimRun( $due, array $config ) {
+		$claimed   = false;
+		$following = Schedule::nextRun( $config, $this->timezone(), time() );
+		$tz        = $this->timezone()->getName();
+		$this->updateState(
+			function ( array $s ) use ( $due, $following, $tz, &$claimed ) {
+				if ( ! isset( $s['next_run'] ) || (int) $s['next_run'] !== (int) $due ) {
+					return $s;
+				}
+				$claimed        = true;
+				$s['next_run']  = $following;
+				$s['tz']        = $tz;
+				$s['last_run']  = time();
+				$s['deferrals'] = 0;
+				return $s;
+			}
+		);
+		if ( $claimed && function_exists( 'delete_transient' ) ) {
+			delete_transient( self::RETRY_TRANSIENT );
+		}
+		return $claimed;
 	}
 
 	/**
@@ -540,9 +789,11 @@ class BackupManager {
 	 */
 	protected function advanceSchedule( array $config, $job_id = '' ) {
 		$next = Schedule::nextRun( $config, $this->timezone(), time() );
+		$tz   = $this->timezone()->getName();
 		$this->updateState(
-			function ( array $s ) use ( $next, $job_id ) {
+			function ( array $s ) use ( $next, $job_id, $tz ) {
 				$s['next_run']  = $next;
+				$s['tz']        = $tz;
 				$s['last_run']  = time();
 				$s['deferrals'] = 0;
 				if ( '' !== $job_id ) {
@@ -594,8 +845,20 @@ class BackupManager {
 				continue;
 			}
 			if ( Job::TYPE_IMPORT === $job->type() || Job::TYPE_REPLACE === $job->type() ) {
+				$idle = time() - (int) $job->get( 'updated_at' );
+				if ( $idle > self::STALE_JOB_SECONDS && ! \SHCM\Jobs\JobLock::isLocked( $this->plugin->runner()->jobsDirectory(), $job->id() ) ) {
+					// Abandoned (an encrypted restore whose tab was closed can
+					// never be resumed without its password): it must not hold
+					// every future backup back.
+					continue;
+				}
 				return array(
-					'message' => __( 'A restore or search & replace is in progress.', 'sh-clone-migration' ),
+					'message' => sprintf(
+						/* translators: 1: job id, 2: human time difference */
+						__( 'A restore or search & replace is in progress (job %1$s, last active %2$s ago).', 'sh-clone-migration' ),
+						$job->id(),
+						function_exists( 'human_time_diff' ) ? human_time_diff( time() - max( 0, $idle ), time() ) : max( 0, $idle ) . 's'
+					),
 					'defer'   => true,
 				);
 			}
@@ -664,6 +927,9 @@ class BackupManager {
 			'exclusions'             => array_values( array_unique( $exclusions ) ),
 			'encrypted'              => $encrypted,
 			'password_source'        => $encrypted ? 'backup' : '',
+			// The job keeps the password it started with (sealed): a new one
+			// saved while it runs must not break the archive half way.
+			'password_sealed'        => $encrypted ? (string) $this->state()['password'] : '',
 			'background'             => true,
 			'backup'                 => array(
 				'kind'        => 'backup',
@@ -795,8 +1061,9 @@ class BackupManager {
 		if ( '' !== (string) $password || ! $job instanceof Job || 'backup' !== $job->param( 'password_source' ) ) {
 			return (string) $password;
 		}
-		$stored = $this->backupPassword();
-		if ( null === $stored ) {
+		$own    = (string) $job->param( 'password_sealed', '' );
+		$stored = '' !== $own ? $this->box()->open( $own, self::PASSWORD_CTX ) : $this->backupPassword();
+		if ( null === $stored || '' === $stored ) {
 			return '';
 		}
 		$this->plugin->logger()->redactor()->addLiteral( $stored );
@@ -859,7 +1126,7 @@ class BackupManager {
 			$status = 'partial';
 			$error  = isset( $remote['error'] ) ? (string) $remote['error'] : __( 'The backup was not uploaded to Google Drive.', 'sh-clone-migration' );
 		}
-		$entry = $this->history()->record(
+		$entry = $this->recordSafely(
 			$id,
 			array(
 				'status'    => $status,
@@ -889,8 +1156,20 @@ class BackupManager {
 		if ( ! $job instanceof Job || ! $this->isBackupJob( $job ) ) {
 			return;
 		}
-		$message = is_array( $error ) && isset( $error['message'] ) ? (string) $error['message'] : __( 'The backup failed.', 'sh-clone-migration' );
-		$id      = $this->historyId( $job );
+		// JobRunner passes the exception; the job's saved error has the same
+		// message.
+		if ( $error instanceof \Throwable ) {
+			$message = $error->getMessage();
+		} elseif ( is_array( $error ) && isset( $error['message'] ) ) {
+			$message = (string) $error['message'];
+		} else {
+			$saved   = $job->get( 'error' );
+			$message = is_array( $saved ) && isset( $saved['message'] ) ? (string) $saved['message'] : '';
+		}
+		if ( '' === trim( $message ) ) {
+			$message = __( 'The backup failed.', 'sh-clone-migration' );
+		}
+		$id = $this->historyId( $job );
 
 		if ( $job->param( 'upload_only' ) ) {
 			if ( '' !== $id ) {
@@ -908,9 +1187,10 @@ class BackupManager {
 		}
 
 		$path  = (string) $job->param( 'archive_path' );
-		$entry = $this->history()->record(
+		$entry = $this->recordSafely(
 			$id,
 			array(
+				'kind'     => 'backup',
 				'status'   => 'failed',
 				'finished' => time(),
 				'archive'  => '' !== $path ? basename( $path ) : '',
@@ -1062,7 +1342,7 @@ class BackupManager {
 			'config'       => $config,
 			'describe'     => Schedule::describe( $config ),
 			'next_run'     => false === $next ? null : $next,
-			'overdue'      => null !== $state['next_run'] && 'manual' !== $config['frequency'] && (int) $state['next_run'] < time() - 3600,
+			'overdue'      => null !== $state['next_run'] && 'manual' !== $config['frequency'] && (int) $state['next_run'] < time() - 3600 && $this->identityMatches(),
 			'last'         => $last,
 			'identity_ok'  => $this->identityMatches(),
 			'has_password' => $this->hasPassword(),
@@ -1082,7 +1362,11 @@ class BackupManager {
 	 */
 	public function configReadable() {
 		$store = $this->store();
-		return $store->readable( self::DOCUMENT ) && $store->readable( Connection::DOCUMENT ) && $store->readable( History::DOCUMENT );
+		// A damaged history only costs the record of past runs; a damaged
+		// schedule or connection would read as "nothing set up".
+		return $store->readable( self::DOCUMENT ) && ! $store->damaged( self::DOCUMENT )
+			&& $store->readable( Connection::DOCUMENT ) && ! $store->damaged( Connection::DOCUMENT )
+			&& $store->readable( History::DOCUMENT );
 	}
 
 	/**

@@ -672,6 +672,45 @@ class BackupFoundationTest extends TestCase {
 		$this->assertSame( array(), $store->problems( array( 'schedule', 'gdrive', 'history' ) ) );
 	}
 
+	public function testTheConfigDirectoryTakesTheStorageDirectoryMode() {
+		// Whoever creates it first (WP-CLI as root, PHP as www-data), the
+		// other account must be able to write where the site owner allowed it.
+		chmod( $this->dir, 0777 );
+		$this->store()->write( 'schedule', array( 'a' => 1 ) );
+		$this->assertSame( 0777, fileperms( $this->dir . '/config' ) & 0777 );
+
+		$tight = $this->dir . '/tight';
+		mkdir( $tight, 0750 );
+		( new ConfigStore( $tight . '/config' ) )->write( 'schedule', array( 'a' => 1 ) );
+		$this->assertSame( 0755, fileperms( $tight . '/config' ) & 0777, 'never less than 0755' );
+	}
+
+	public function testDamagedDocumentIsReportedNotTakenForEmpty() {
+		$store = $this->store();
+		$this->assertFalse( $store->damaged( 'schedule' ), 'missing is not damaged' );
+		$store->write( 'schedule', array( 'config' => array( 'frequency' => 'daily' ) ) );
+		$this->assertFalse( $store->damaged( 'schedule' ) );
+		$this->assertSame( array(), $store->problems( array( 'schedule' ) ) );
+
+		// Cut short, as by a partial copy of wp-content.
+		$path = $store->path( 'schedule' );
+		file_put_contents( $path, substr( file_get_contents( $path ), 0, -2 ) );
+		$this->assertTrue( $store->damaged( 'schedule' ) );
+		$this->assertSame( array(), $store->read( 'schedule' ) );
+		$problems = $store->problems( array( 'schedule' ) );
+		$this->assertCount( 1, $problems );
+		$this->assertStringContainsString( 'damaged', $problems[0] );
+
+		// Saving again replaces it.
+		$store->update(
+			'schedule',
+			function ( array $data ) {
+				return array( 'config' => array( 'frequency' => 'weekly' ) );
+			}
+		);
+		$this->assertFalse( $store->damaged( 'schedule' ) );
+	}
+
 	public function testUnreadableDocumentIsNeverOverwritten() {
 		if ( function_exists( 'posix_geteuid' ) && 0 === posix_geteuid() ) {
 			$this->markTestSkipped( 'root can read every file; covered by the www-data check in scripts/backup-e2e.sh.' );
