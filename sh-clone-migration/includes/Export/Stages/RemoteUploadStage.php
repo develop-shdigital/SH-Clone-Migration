@@ -272,13 +272,26 @@ class RemoteUploadStage extends AbstractStage {
 	protected function openSession( Job $job, array &$state ) {
 		$backup     = (array) $job->param( 'backup', array() );
 		$connection = $this->backups->connection();
+		// When the backup was made: the backup job's start, or for a retried
+		// upload the start its history entry recorded. A file's mtime is only
+		// the last resort (a copy without preserved times would look new).
+		$made = 0;
+		if ( ! $job->param( 'upload_only' ) ) {
+			$made = (int) $job->get( 'started_at' );
+		} elseif ( '' !== (string) $job->param( 'history_id', '' ) ) {
+			$entry = $this->backups->history()->get( (string) $job->param( 'history_id' ) );
+			$made  = isset( $entry['started'] ) ? (int) $entry['started'] : 0;
+		}
+		if ( $made <= 0 ) {
+			$made = (int) @filemtime( $state['path'] );
+		}
 		$properties = array(
 			'shcm_site' => $connection->siteId(),
 			'shcm_kind' => isset( $backup['kind'] ) && 'backup' === $backup['kind'] ? 'backup' : 'manual',
 			'shcm_job'  => $job->param( 'upload_only' ) ? (string) $job->param( 'history_id', $job->id() ) : $job->id(),
-			// When the backup was made (its archive was finished), so that a
-			// retried upload does not look like the newest backup on Drive.
-			'shcm_time' => (string) (int) @filemtime( $state['path'] ),
+			// So that a retried upload does not look like the newest backup
+			// on Drive (retention ranks by this).
+			'shcm_time' => (string) $made,
 			'shcm_v'    => '1',
 		);
 		if ( '' !== $state['sha256'] ) {
