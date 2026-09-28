@@ -493,17 +493,31 @@ missed runs once, as soon as possible. `wp shcm backup run` (system cron) and
 the WP-Cron event share one "start if due" path, so they cannot both start the
 same run. A backup never starts while an import or search & replace is
 running (it is postponed by 15 minutes, up to eight times) or while the
-previous backup is still running (skipped and recorded).
+previous backup is still running (skipped, recorded and e-mailed).
 
 **Running without a browser.** Jobs advance in slices of a few seconds. A
 background job asks the site for its next slice with a non-blocking loopback
 request to `admin-ajax.php` carrying an HMAC of the job id (the same technique
 WordPress uses to spawn WP-Cron); the handler can advance that job and nothing
 else. When loopbacks are blocked (HTTP authentication on a staging site, a
-firewall), the minute worker picks the job up instead and System Status says
-so. A job that asks to wait (an upload backing off) gets a WP-Cron event at
-that time instead of a loopback. An open Scheduled Backups page polls the job
-every two seconds and takes over when the server is not making progress.
+firewall), the minute worker picks the job up instead, whatever the
+"Background worker" setting says (that setting is about browser migrations);
+System Status reports blocked loopbacks only when one was sent and never
+arrived. A job that asks to wait (an upload backing off, a database retry)
+gets a WP-Cron event at that time instead of a loopback; one that used up its
+budget continues at once. An open Scheduled Backups page polls every two
+seconds but leaves a healthy chain alone: it steps in only when the job has
+sat idle for 20 seconds (or loopbacks cannot run), and then drives it through
+the same runner, which starts the chain again. Under WP-CLI (`wp cron event
+run` from a system cron job) the loopbacks are fired too.
+
+**Requests that die.** A request killed mid-step (a PHP fatal error, the
+memory limit, a server timeout) cannot record anything, so every tick marks
+the job "tick open" when it starts and clears the mark when it ends normally.
+A tick that finds the mark still set knows its predecessor died; after three
+such requests in a row without any saved progress the job fails with that
+explanation (and a backup sends its failure e-mail) instead of being retried
+forever while every later scheduled run is skipped.
 
 **One slice at a time.** Every tick takes an exclusive `flock()` on
 `jobs/<id>.lock` (released by the operating system if the process dies) and,

@@ -317,10 +317,15 @@
 		this.jobId = null;
 		this.token = '';
 		this.stopped = false;
+		// Each polling loop carries the generation it was started in; a loop
+		// from an older generation (superseded by cancel() or a restart) ends
+		// quietly instead of polling alongside the new one.
+		this.generation = 0;
 	}
 
 	JobRunner.prototype.start = function ( action, payload, password ) {
 		var self = this;
+		var generation = ++this.generation;
 		this.password = password || '';
 		this.stopped = false;
 		this.view.show();
@@ -331,7 +336,7 @@
 				// The token authorises finishing this job even after a restore
 				// has replaced the user account this session belongs to.
 				self.token = job.token || '';
-				return self.loop( job );
+				return self.loop( job, generation );
 			} )
 			.catch( function ( error ) {
 				self.fail( error );
@@ -340,6 +345,7 @@
 
 	JobRunner.prototype.resume = function ( jobId, password ) {
 		var self = this;
+		var generation = ++this.generation;
 		this.jobId = jobId;
 		this.password = password || '';
 		this.stopped = false;
@@ -347,15 +353,18 @@
 
 		return tick( jobId, this.password, this.options.useEndpoint, this.token )
 			.then( function ( job ) {
-				return self.loop( job );
+				return self.loop( job, generation );
 			} )
 			.catch( function ( error ) {
 				self.fail( error );
 			} );
 	};
 
-	JobRunner.prototype.loop = function ( job ) {
+	JobRunner.prototype.loop = function ( job, generation ) {
 		var self = this;
+		if ( generation !== this.generation ) {
+			return job;
+		}
 		this.view.render( job );
 
 		if ( this.stopped ) {
@@ -374,13 +383,18 @@
 		// loopback requests do not get through.
 		return sleep( job.background ? 2000 : 250 )
 			.then( function () {
+				if ( generation !== self.generation ) {
+					return null;
+				}
 				return tick( self.jobId, self.password, self.options.useEndpoint, self.token );
 			} )
 			.then( function ( next ) {
-				return self.loop( next );
+				return next ? self.loop( next, generation ) : job;
 			} )
 			.catch( function ( error ) {
-				self.fail( error );
+				if ( generation === self.generation ) {
+					self.fail( error );
+				}
 			} );
 	};
 
@@ -390,13 +404,19 @@
 			return Promise.resolve();
 		}
 		this.stopped = true;
+		// Supersede the running loop: exactly one loop follows the job from
+		// here, whatever the server answers.
+		var generation = ++this.generation;
 		return api( 'cancel', { job_id: this.jobId, job_token: this.token } ).then( function ( job ) {
+			if ( generation !== self.generation ) {
+				return;
+			}
 			self.view.render( job );
 			if ( job.status !== 'cancelled' && job.status !== 'completed' && job.status !== 'failed' ) {
 				// Another request is working on the job; it stops at its next
 				// checkpoint. Keep watching until it has.
 				self.stopped = false;
-				return self.loop( job );
+				return self.loop( job, generation );
 			}
 			if ( self.options.onFinish ) {
 				self.options.onFinish( job );
@@ -1064,6 +1084,8 @@
 				var row = button.closest( 'tr' );
 				api( 'delete_job', { job_id: row.getAttribute( 'data-job' ) } ).then( function () {
 					row.remove();
+				} ).catch( function ( error ) {
+					window.alert( error.message );
 				} );
 			} );
 		} );

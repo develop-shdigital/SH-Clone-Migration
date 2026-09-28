@@ -29,8 +29,13 @@ class Scheduler {
 	/**
 	 * Seconds a background job (a backup) must sit untouched before the
 	 * worker takes over from the loopback chain that normally drives it.
+	 *
+	 * A working chain saves at the end of each slice and starts the next one
+	 * a moment later, and a slice in progress holds the job's lock (checked
+	 * separately). Short enough that the worker, whose own slices can last
+	 * half a minute, gets the job again at the next minute.
 	 */
-	const WORKER_IDLE_BACKGROUND = 45;
+	const WORKER_IDLE_BACKGROUND = 20;
 
 	/**
 	 * Plugin container.
@@ -88,12 +93,12 @@ class Scheduler {
 	 * @return void
 	 */
 	public function runWorker() {
-		if ( ! $this->plugin->settings()->getBool( 'enable_cron_worker', true ) ) {
-			return;
-		}
+		// The setting is about browser migrations. Background jobs have no
+		// other fallback driver, so the worker keeps taking care of them.
+		$browser_jobs = $this->plugin->settings()->getBool( 'enable_cron_worker', true );
 
 		$runner = $this->plugin->runner();
-		$job    = self::pickWorkerJob( $this->plugin->jobs()->all( null, 10 ), $runner->jobsDirectory(), time() );
+		$job    = self::pickWorkerJob( $this->plugin->jobs()->all( null, 10 ), $runner->jobsDirectory(), time(), $browser_jobs );
 		if ( null === $job ) {
 			return;
 		}
@@ -127,16 +132,18 @@ class Scheduler {
 	 * nobody else is going to drive them, while an abandoned browser
 	 * migration may still be resumed by its user.
 	 *
-	 * @param Job[]  $jobs     Candidate jobs, newest first.
-	 * @param string $jobs_dir Jobs directory (for the lock probe).
-	 * @param int    $now      Current time.
+	 * @param Job[]  $jobs         Candidate jobs, newest first.
+	 * @param string $jobs_dir     Jobs directory (for the lock probe).
+	 * @param int    $now          Current time.
+	 * @param bool   $browser_jobs Whether browser-driven jobs may be taken
+	 *                             ("Background worker" setting).
 	 * @return Job|null
 	 */
-	public static function pickWorkerJob( array $jobs, $jobs_dir, $now ) {
+	public static function pickWorkerJob( array $jobs, $jobs_dir, $now, $browser_jobs = true ) {
 		$background = null;
 		$fallback   = null;
 		foreach ( $jobs as $job ) {
-			if ( ! $job instanceof Job || ! self::workerMayTick( $job, $jobs_dir, $now ) ) {
+			if ( ! $job instanceof Job || ( ! $browser_jobs && ! $job->param( 'background' ) ) || ! self::workerMayTick( $job, $jobs_dir, $now ) ) {
 				continue;
 			}
 			if ( JobLock::cancelRequested( $jobs_dir, $job->id() ) ) {

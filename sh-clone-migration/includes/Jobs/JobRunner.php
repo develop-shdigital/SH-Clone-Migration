@@ -22,6 +22,13 @@ defined( 'ABSPATH' ) || defined( 'SHCM_ALLOW_STANDALONE' ) || exit;
 class JobRunner {
 
 	/**
+	 * Requests in a row that may die without saving any progress (PHP fatal
+	 * error, memory limit, the process killed by a server timeout) before
+	 * the job is failed instead of being retried forever.
+	 */
+	const MAX_DEAD_TICKS = 3;
+
+	/**
 	 * Job store.
 	 *
 	 * @var JobStore
@@ -233,6 +240,30 @@ class JobRunner {
 			$job->set( 'started_at', time() );
 			$this->logger->info( sprintf( 'Job %s started (%s).', $job->id(), $job->type() ) );
 		}
+
+		// A request that ended normally cleared 'tick_open'. Still set means
+		// the last one died mid-step; dying again and again on the same step
+		// would otherwise go on forever, with nobody told.
+		$dead = 0;
+		if ( $job->get( 'tick_open' ) ) {
+			$progressed = (float) $job->get( 'progress' ) > (float) $job->get( 'tick_progress', -1.0 );
+			$dead       = $progressed ? 0 : (int) $job->get( 'dead_ticks', 0 ) + 1;
+			$this->logger->warning( sprintf( 'The previous request working on job %s stopped before it could finish its step (a PHP fatal error, the memory limit or a server timeout; see the PHP error log).', $job->id() ) );
+		}
+		$job->set( 'dead_ticks', $dead );
+		if ( $dead >= self::MAX_DEAD_TICKS ) {
+			$error = new \RuntimeException(
+				sprintf(
+					/* translators: %d: number of requests */
+					__( 'The server stopped the request working on this job %d times in a row before it could save any progress (a PHP fatal error, the memory limit or a server timeout). The PHP error log names the cause.', 'sh-clone-migration' ),
+					$dead
+				)
+			);
+			$this->runCleanup( $job, $error );
+			return $this->failJob( $job, $error, array( 'suggestion' => __( 'Raise the PHP memory limit or the server time limits, or lower "Time budget per request" in the settings, then start again.', 'sh-clone-migration' ) ) );
+		}
+		$job->set( 'tick_open', true );
+		$job->set( 'tick_progress', (float) $job->get( 'progress' ) );
 		$job->set( 'status', Job::STATUS_RUNNING );
 		$job->set( 'ticks', (int) $job->get( 'ticks' ) + 1 );
 		$this->store->save( $job );
@@ -296,6 +327,11 @@ class JobRunner {
 			$pause = $budget->expired() || ! empty( $data['yield'] );
 			if ( $pause ) {
 				$job->set( 'status', Job::STATUS_PAUSED );
+				$job->set( 'tick_open', false );
+				// Tells a background driver whether the job asked to wait
+				// (then it is not called again at once) or simply used up
+				// this request's budget.
+				$job->setRuntime( 'yielded', ! empty( $data['yield'] ) );
 			}
 			$this->store->save( $job );
 			if ( $pause ) {
@@ -362,6 +398,7 @@ class JobRunner {
 	protected function markCancelled( Job $job, $error = null ) {
 		$this->runCleanup( $job, $error );
 		$job->set( 'status', Job::STATUS_CANCELLED );
+		$job->set( 'tick_open', false );
 		$job->set( 'finished_at', time() );
 		$job->set( 'message', $this->outcomeMessage( $job, Job::STATUS_CANCELLED ) );
 		if ( ! $this->store->save( $job ) ) {
@@ -529,6 +566,7 @@ class JobRunner {
 			return $this->stopCancelled( $job );
 		}
 		$job->set( 'status', Job::STATUS_COMPLETED );
+		$job->set( 'tick_open', false );
 		$job->set( 'progress', 100.0 );
 		$job->set( 'stage_progress', 1.0 );
 		$job->set( 'finished_at', time() );
@@ -558,6 +596,7 @@ class JobRunner {
 			return $this->stopCancelled( $job );
 		}
 		$job->set( 'status', Job::STATUS_FAILED );
+		$job->set( 'tick_open', false );
 		$job->set( 'finished_at', time() );
 		$job->set(
 			'error',

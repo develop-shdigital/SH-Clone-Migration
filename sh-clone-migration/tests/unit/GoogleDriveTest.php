@@ -7,6 +7,8 @@
 
 namespace SHCM\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use SHCM\Backup\ConfigStore;
 use SHCM\Filesystem\Storage;
@@ -1480,6 +1482,21 @@ class GoogleDriveTest extends TestCase {
 			$this->assertSame( in_array( $kind, array( DriveException::SERVER, DriveException::RATE_LIMITED ), true ), $e->isRetryable(), 'HTTP ' . $status );
 		}
 		$this->assertSame( array(), $this->http->responses );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function testReasonsSurviveSiteWideLiteralsThatHappenToMatch() {
+		// DB_USER is masked in logs, but a database user called "user" or
+		// "client" must not turn a rate limit into a hard failure.
+		define( 'DB_USER', 'user' );
+		define( 'DB_PASSWORD', 'client' );
+		$e = DriveException::fromResponse( new HttpResponse( 403, array(), json_encode( self::apiError( 403, 'userRateLimitExceeded', 'Slow down' ) ) ), array() );
+		$this->assertSame( 'userRateLimitExceeded', $e->reason() );
+		$this->assertSame( DriveException::RATE_LIMITED, $e->kind() );
+		$this->assertTrue( $e->isRetryable() );
+		list( $reason ) = DriveException::describe( new HttpResponse( 401, array(), json_encode( array( 'error' => 'invalid_client' ) ) ) );
+		$this->assertSame( 'invalid_client', $reason );
 	}
 
 	public function testErrorReasonThatCarriesASecretIsDropped() {

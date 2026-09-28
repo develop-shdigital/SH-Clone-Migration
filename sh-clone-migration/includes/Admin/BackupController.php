@@ -158,17 +158,21 @@ class BackupController {
 			throw new \InvalidArgumentException( __( 'The client ID and secret are set in wp-config.php and cannot be changed here.', 'sh-clone-migration' ) );
 		}
 		// A field set by a wp-config.php constant is locked in the form (it
-		// posts nothing); the constant's value is the one that counts.
+		// posts nothing); the constant's value is the one that counts, and a
+		// constant's secret is never copied into storage.
 		$locked        = $connection->constantFields();
 		$client_id     = $locked['client_id'] ? (string) $connection->clientId() : trim( (string) $client_id );
-		$client_secret = $locked['client_secret'] ? (string) $connection->clientSecret() : trim( (string) $client_secret );
+		$client_secret = $locked['client_secret'] ? '' : trim( (string) $client_secret );
 		if ( ! preg_match( '/^[A-Za-z0-9._\-]{8,200}$/', $client_id ) ) {
 			throw new \InvalidArgumentException( __( 'That does not look like a Google OAuth client ID (it ends in .apps.googleusercontent.com).', 'sh-clone-migration' ) );
 		}
-		if ( '' === $client_secret ) {
-			$client_secret = (string) $connection->clientSecret();
+		// '' keeps the stored secret (the form never shows it again), except
+		// for a new client: its secret is a different one.
+		if ( '' === $client_secret && ! $locked['client_secret'] && $client_id !== (string) $connection->clientId() ) {
+			throw new \InvalidArgumentException( __( 'Enter the client secret of the new OAuth client.', 'sh-clone-migration' ) );
 		}
-		if ( ! preg_match( '/^[A-Za-z0-9._\-]{8,200}$/', $client_secret ) ) {
+		$effective = '' !== $client_secret ? $client_secret : (string) $connection->clientSecret();
+		if ( ! preg_match( '/^[A-Za-z0-9._\-]{8,200}$/', $effective ) ) {
 			throw new \InvalidArgumentException( __( 'Enter the client secret shown when the OAuth client was created.', 'sh-clone-migration' ) );
 		}
 		$connection->setCredentials( $client_id, $client_secret );

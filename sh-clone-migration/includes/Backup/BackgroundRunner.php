@@ -28,7 +28,13 @@ class BackgroundRunner {
 	const ACTION            = 'shcm_background_tick';
 	const RESUME_HOOK       = 'shcm_background_resume';
 	const BLOCKED_TRANSIENT = 'shcm_loopback_blocked';
-	const SHORT_SLICE       = 2.0;
+	const PENDING_TRANSIENT = 'shcm_loopback_pending';
+
+	/**
+	 * Seconds a loopback request may take to arrive before the worker, finding
+	 * the job idle, concludes that loopbacks do not get through.
+	 */
+	const ARRIVAL_GRACE = 30;
 
 	/**
 	 * Container.
@@ -94,32 +100,31 @@ class BackgroundRunner {
 		if ( null !== $seconds ) {
 			$budget = \SHCM\Jobs\Budget::create( max( 1, (int) $seconds ), $this->plugin->settings()->getInt( 'memory_guard', 80 ) );
 		}
-		$started = microtime( true );
-		$job     = $this->plugin->runner()->tick( $job, $budget );
+		$job = $this->plugin->runner()->tick( $job, $budget );
 		if ( $job->runtime( 'busy' ) ) {
 			// Another request holds the job; it arranges the next slice.
 			return $job;
 		}
-		$this->continueLater( $job, microtime( true ) - $started );
+		$this->continueLater( $job );
 		return $job;
 	}
 
 	/**
 	 * Arrange the next slice of a job that is still runnable.
 	 *
-	 * @param Job   $job     Job.
-	 * @param float $elapsed Seconds the last slice took (null if unknown).
+	 * @param Job $job Job as the last slice left it.
 	 * @return void
 	 */
-	public function continueLater( Job $job, $elapsed = null ) {
+	public function continueLater( Job $job ) {
 		if ( ! $job->isRunnable() || ! $job->param( 'background' ) ) {
 			return;
 		}
 		$resume_at = (int) $job->shared( 'resume_at', 0 );
-		// A slice that ended almost at once without asking to wait means the
-		// job is idling (waiting on a retry, say); spinning loopback requests
-		// would only burn the server, so let WP-Cron come back later.
-		if ( $resume_at <= time() && null !== $elapsed && $elapsed < self::SHORT_SLICE ) {
+		// A slice that asked to wait without saying until when (a retry
+		// after a database error, say) is not called again at once:
+		// spinning loopback requests would only burn the server. A slice
+		// that simply used up its budget continues straight away.
+		if ( $resume_at <= time() && $job->runtime( 'yielded' ) ) {
 			$resume_at = time() + 30;
 		}
 		if ( $resume_at > time() + 1 ) {
@@ -139,9 +144,9 @@ class BackgroundRunner {
 	 * @return void
 	 */
 	public function spawn( $job_id ) {
-		if ( defined( 'WP_CLI' ) && WP_CLI ) {
-			return; // The CLI drives its jobs itself.
-		}
+		// Also under WP-CLI: the backup commands drive their jobs themselves
+		// and never get here, but `wp cron event run` (a system cron job on a
+		// site with DISABLE_WP_CRON) does, and has nobody else to continue.
 		/**
 		 * Whether to chain background slices through loopback requests.
 		 *
@@ -150,6 +155,11 @@ class BackgroundRunner {
 		 */
 		if ( ! apply_filters( 'shcm_background_loopback', true, $job_id ) ) {
 			return;
+		}
+		// Remembered until the request arrives: the evidence afterWorkerTick()
+		// needs before it reports loopbacks as blocked.
+		if ( false === get_transient( self::PENDING_TRANSIENT ) ) {
+			set_transient( self::PENDING_TRANSIENT, time(), HOUR_IN_SECONDS );
 		}
 		wp_remote_post(
 			admin_url( 'admin-ajax.php' ),
@@ -181,6 +191,7 @@ class BackgroundRunner {
 		if ( null === $job || ! $job->param( 'background' ) ) {
 			wp_send_json_error( array( 'message' => 'Unknown job.' ), 404 );
 		}
+		delete_transient( self::PENDING_TRANSIENT );
 		delete_transient( self::BLOCKED_TRANSIENT );
 		$this->plugin->logger()->channel( $job->id() );
 		$job = $this->drive( $job );
@@ -211,9 +222,14 @@ class BackgroundRunner {
 		if ( ! $job instanceof Job || ! $job->param( 'background' ) ) {
 			return;
 		}
-		// The worker only takes background jobs that sat idle for 45 s or
-		// more; with working loopbacks that does not happen.
-		set_transient( self::BLOCKED_TRANSIENT, time(), DAY_IN_SECONDS );
+		// The worker also takes over after a slice that died or a wait for a
+		// retry, so only a loopback that was sent and never arrived counts
+		// as evidence that loopbacks are blocked.
+		$sent = get_transient( self::PENDING_TRANSIENT );
+		if ( false !== $sent && time() - (int) $sent > self::ARRIVAL_GRACE ) {
+			set_transient( self::BLOCKED_TRANSIENT, time(), DAY_IN_SECONDS );
+			delete_transient( self::PENDING_TRANSIENT );
+		}
 		$this->continueLater( $job );
 	}
 }

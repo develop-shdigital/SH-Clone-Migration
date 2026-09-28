@@ -262,12 +262,39 @@ class DriveException extends \RuntimeException {
 
 		// The reason ends up in messages and in the stored connection error, so a
 		// value that is (or contains) a secret or a token shape is dropped whole:
-		// a client secret such as "GOCSPX-..." fits the character class.
-		if ( ! preg_match( '/^[A-Za-z0-9_.\-]{1,64}$/', $reason ) || self::safeText( $reason, $secrets ) !== $reason ) {
+		// a client secret such as "GOCSPX-..." fits the character class. Only
+		// this request's secrets and Google's token shapes count here, not the
+		// site-wide literals safeText() adds (DB_USER may well be "rate" or
+		// "client"): the reason drives retries and reconnect decisions.
+		if ( ! self::reasonIsSafe( $reason, $secrets ) ) {
 			$reason = '';
 		}
 
 		return array( $reason, self::safeText( $message, $secrets ) );
+	}
+
+	/**
+	 * Whether Google's short error reason can be kept as it is.
+	 *
+	 * @param string   $reason  Reason ("userRateLimitExceeded", "invalid_grant").
+	 * @param string[] $secrets Secrets of the request.
+	 * @return bool
+	 */
+	private static function reasonIsSafe(
+		$reason,
+		#[\SensitiveParameter]
+		array $secrets = array()
+	) {
+		if ( ! preg_match( '/^[A-Za-z0-9_.\-]{1,64}$/', (string) $reason ) ) {
+			return false;
+		}
+		foreach ( $secrets as $secret ) {
+			if ( is_string( $secret ) && strlen( $secret ) >= 6 && false !== strpos( $reason, $secret ) ) {
+				return false;
+			}
+		}
+		// Client secrets, access tokens and API keys.
+		return ! preg_match( '/GOCSPX-|ya29\.|AIza[0-9A-Za-z_\-]{10}/', $reason );
 	}
 
 	/**

@@ -174,7 +174,9 @@ Menu::header(
 								<?php esc_html_e( 'Resume', 'sh-clone-migration' ); ?>
 							</a>
 						<?php endif; ?>
-						<button type="button" class="button button-small button-link-delete" data-action="delete-job"><?php esc_html_e( 'Remove', 'sh-clone-migration' ); ?></button>
+						<?php if ( ! ( $shcm_job->isRunnable() && $shcm_job->param( 'background' ) ) ) : ?>
+							<button type="button" class="button button-small button-link-delete" data-action="delete-job"><?php esc_html_e( 'Remove', 'sh-clone-migration' ); ?></button>
+						<?php endif; ?>
 					</td>
 				</tr>
 			<?php endforeach; ?>

@@ -635,6 +635,64 @@ class JobsTest extends TestCase {
 		$this->assertFalse( JobLock::cancelRequested( $this->storage->jobs(), $job->id() ), 'The request was carried out.' );
 	}
 
+	/**
+	 * A request that dies mid-step (PHP fatal error, memory limit, the process
+	 * killed by a server timeout) leaves tick_open behind; simulate that.
+	 *
+	 * @param Job $job Job as the dying request saved it.
+	 * @return void
+	 */
+	protected function dieMidTick( Job $job ) {
+		$job->set( 'status', Job::STATUS_RUNNING );
+		$job->set( 'tick_open', true );
+		$job->set( 'tick_progress', (float) $job->get( 'progress' ) );
+		$this->store->save( $job );
+	}
+
+	public function testAJobWhoseRequestsKeepDyingFailsInsteadOfLoopingForever() {
+		$stages   = array( 'work' => $this->stage( 'work', 6 ) );
+		$resolver = new ArrayResolver( $stages );
+		$runner   = new JobRunner( $this->store, $resolver, $this->logger, $this->settings );
+		$job      = Job::create( 'export', array(), array_keys( $stages ) );
+		$job->set( 'dead_ticks', JobRunner::MAX_DEAD_TICKS - 1 );
+		$this->dieMidTick( $job );
+
+		$job = $runner->tick( $this->store->load( $job->id() ) );
+		$this->assertSame( Job::STATUS_FAILED, $job->status() );
+		$this->assertStringContainsString( 'times in a row', $job->get( 'error' )['message'] );
+		$this->assertSame( 0, (int) ( $job->stageState( 'work' )['done'] ?? 0 ), 'the failing step is not run again' );
+		$this->assertTrue( $stages['work']->cleaned, 'cleanups run' );
+		$this->assertFalse( (bool) $this->store->load( $job->id() )->get( 'tick_open' ) );
+	}
+
+	public function testDeadRequestsAreCountedOnlyWhileNothingIsSaved() {
+		$stages   = array( 'work' => $this->stage( 'work', 6 ) );
+		$resolver = new ArrayResolver( $stages );
+		$runner   = new JobRunner( $this->store, $resolver, $this->logger, $this->settings );
+		$job      = Job::create( 'export', array(), array_keys( $stages ) );
+		$this->store->save( $job );
+
+		// Two requests die without saving anything: counted, not yet fatal.
+		for ( $i = 1; $i < JobRunner::MAX_DEAD_TICKS; $i++ ) {
+			$this->dieMidTick( $this->store->load( $job->id() ) );
+			$job = $runner->tick( $this->store->load( $job->id() ), new Budget( -1, 0 ) );
+			$this->assertSame( Job::STATUS_PAUSED, $job->status() );
+			$this->assertSame( $i, (int) $job->get( 'dead_ticks' ) );
+			$this->assertFalse( (bool) $job->get( 'tick_open' ), 'a request that ends normally closes its tick' );
+		}
+
+		// A request that dies after saving progress resets the count.
+		$dying = $this->store->load( $job->id() );
+		$this->dieMidTick( $dying );
+		$dying->set( 'progress', (float) $dying->get( 'progress' ) + 5 );
+		$this->store->save( $dying );
+		$job = $runner->tick( $this->store->load( $job->id() ), new Budget( -1, 0 ) );
+		$this->assertSame( 0, (int) $job->get( 'dead_ticks' ) );
+
+		$job = $runner->tick( $this->store->load( $job->id() ) );
+		$this->assertSame( Job::STATUS_COMPLETED, $job->status() );
+	}
+
 	public function testUnknownStageFailsCleanly() {
 		$resolver = new ArrayResolver( array() );
 		$runner   = new JobRunner( $this->store, $resolver, $this->logger, $this->settings );
@@ -1218,8 +1276,8 @@ class JobsTest extends TestCase {
 		$bg = array( 'background' => true );
 
 		$this->assertFalse( Scheduler::workerMayTick( $job( Job::STATUS_PENDING, array(), 600 ), $dir, $now ), 'A pending browser job is still being started.' );
-		$this->assertTrue( Scheduler::workerMayTick( $job( Job::STATUS_PENDING, $bg, 45 ), $dir, $now ), 'A background job may never have been ticked.' );
-		$this->assertFalse( Scheduler::workerMayTick( $job( Job::STATUS_PENDING, $bg, 44 ), $dir, $now ) );
+		$this->assertTrue( Scheduler::workerMayTick( $job( Job::STATUS_PENDING, $bg, Scheduler::WORKER_IDLE_BACKGROUND ), $dir, $now ), 'A background job may never have been ticked.' );
+		$this->assertFalse( Scheduler::workerMayTick( $job( Job::STATUS_PENDING, $bg, Scheduler::WORKER_IDLE_BACKGROUND - 1 ), $dir, $now ) );
 		$this->assertTrue( Scheduler::workerMayTick( $job( Job::STATUS_PAUSED, array(), 120 ), $dir, $now ) );
 		$this->assertFalse( Scheduler::workerMayTick( $job( Job::STATUS_PAUSED, array(), 119 ), $dir, $now ) );
 		$this->assertTrue( Scheduler::workerMayTick( $job( Job::STATUS_RUNNING, array(), 300 ), $dir, $now ), 'A job stuck "running" after a fatal error.' );
@@ -1291,12 +1349,27 @@ class JobsTest extends TestCase {
 	}
 
 	public function testWorkerSkipsALockedJobAndRespectsTheSetting() {
-		$work   = $this->countingStage( 'work', 1 );
-		$job    = Job::create( 'export', array( 'background' => true ), array( 'work' ) );
-		$this->saveAged( $job, 600 );
+		$work    = $this->countingStage( 'work', 1 );
+		$browser = Job::create( 'export', array(), array( 'work' ) );
+		$browser->set( 'status', Job::STATUS_PAUSED );
+		$this->saveAged( $browser, 600 );
 
+		// "Background worker" off: browser migrations are left alone...
 		( new Scheduler( $this->plugin( new ArrayResolver( array( 'work' => $work ) ), array( 'enable_cron_worker' => false ) ) ) )->runWorker();
 		$this->assertSame( 0, $work->runs );
+		$this->assertSame( Job::STATUS_PAUSED, $this->store->load( $browser->id() )->status() );
+		$this->store->delete( $browser->id() );
+
+		// ...but a background backup has no other fallback and is still run.
+		$bg_work = $this->countingStage( 'work', 1 );
+		$bg      = Job::create( 'export', array( 'background' => true ), array( 'work' ) );
+		$this->saveAged( $bg, 600 );
+		( new Scheduler( $this->plugin( new ArrayResolver( array( 'work' => $bg_work ) ), array( 'enable_cron_worker' => false ) ) ) )->runWorker();
+		$this->assertSame( 1, $bg_work->runs );
+		$this->store->delete( $bg->id() );
+
+		$job = Job::create( 'export', array( 'background' => true ), array( 'work' ) );
+		$this->saveAged( $job, 600 );
 
 		$holder = new JobLock( $this->storage->jobs() );
 		$this->assertTrue( $holder->acquire( $job->id() ) );

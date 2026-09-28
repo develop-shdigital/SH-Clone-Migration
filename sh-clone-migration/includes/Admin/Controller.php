@@ -262,9 +262,40 @@ class Controller {
 		}
 
 		$job->setRuntime( 'password', $password );
+		if ( $job->param( 'background' ) && \SHCM\Core\Plugin::backupsAvailable() ) {
+			return $this->snapshot( $this->lookIn( $job ) );
+		}
 		$job = $this->plugin->runner()->tick( $job );
 
 		return $this->snapshot( $job );
+	}
+
+	/**
+	 * An open page polling a background job (a backup).
+	 *
+	 * The job drives itself through a chain of loopback requests; a page
+	 * that grabbed the job between two of them would break the chain and
+	 * leave the job without a driver once the tab closes. So the page only
+	 * steps in when the chain has stalled (the worker's rule) or cannot run
+	 * at all, and then advances the job through the background runner,
+	 * which starts the chain again.
+	 *
+	 * @param Job $job Job.
+	 * @return Job
+	 */
+	protected function lookIn( Job $job ) {
+		$dir       = $this->plugin->runner()->jobsDirectory();
+		$chainless = get_transient( \SHCM\Backup\BackgroundRunner::BLOCKED_TRANSIENT )
+			|| ! apply_filters( 'shcm_background_loopback', true, $job->id() ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals -- the plugin's own filter.
+		if ( $chainless ) {
+			$due = (int) $job->shared( 'resume_at', 0 ) <= time() && ! \SHCM\Jobs\JobLock::isLocked( $dir, $job->id() );
+		} else {
+			$due = \SHCM\Jobs\Scheduler::workerMayTick( $job, $dir, time() );
+		}
+		if ( ! $due ) {
+			return $job;
+		}
+		return $this->plugin->backups()->runner()->drive( $job );
 	}
 
 	/**
@@ -303,8 +334,15 @@ class Controller {
 	 *
 	 * @param string $job_id Job id.
 	 * @return array
+	 * @throws \RuntimeException When the job is a backup that is still running.
 	 */
 	public function deleteJob( $job_id ) {
+		$job = $this->plugin->jobs()->load( $job_id );
+		if ( null !== $job && $job->isRunnable() && $job->param( 'background' ) ) {
+			// Its next slice would write it back, or, between slices, the chain
+			// would stop with no failure recorded and the partial archive left.
+			throw new \RuntimeException( __( 'This backup is still running. Cancel it first.', 'sh-clone-migration' ) );
+		}
 		$this->plugin->jobs()->delete( $job_id );
 		return array( 'deleted' => true );
 	}

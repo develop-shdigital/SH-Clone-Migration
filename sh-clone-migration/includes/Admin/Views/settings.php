@@ -109,6 +109,7 @@ Menu::header(
 			<td>
 				<label><input type="checkbox" name="enable_cron_worker" <?php checked( $shcm_values['enable_cron_worker'] ); ?>>
 					<?php esc_html_e( 'Let WP-Cron continue a migration when the browser tab is closed', 'sh-clone-migration' ); ?></label>
+				<p class="description"><?php esc_html_e( 'Scheduled backups always run in the background, whatever this setting says.', 'sh-clone-migration' ); ?></p>
 			</td>
 		</tr>
 	</table>

@@ -495,10 +495,10 @@ class BackupManager {
 						'error'    => $conflict['message'],
 					)
 				);
-				if ( $conflict['defer'] ) {
-					// Skipped after repeated postponements: worth an e-mail.
-					$this->notify( $entry, $config );
-				}
+				// Worth an e-mail either way: skipped after repeated
+				// postponements, or because the previous backup is still
+				// running when the next one is due (slow, or stuck).
+				$this->notify( $entry, $config );
 				$this->advanceSchedule( $config );
 			}
 			$this->reconcile();
